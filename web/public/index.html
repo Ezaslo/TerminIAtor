@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <title>TerminIAtor - Déploiement IA</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>TerminIAtor</h1>
+            <p>Choisis ton modèle IA, ton instance, et déploie ton labo.</p>
+        </header>
+
+        <!-- Sélection du modèle -->
+        <section class="model-selection">
+            <h2>Choisissez votre modèle IA</h2>
+            <p class="helper-text">
+                Les modèles sont classés par famille. Les modèles "gros" sont plus lents à lancer et demandent du GPU.
+            </p>
+            <div id="modelCatalog"></div>
+
+            <div id="selectedModel" class="selected-info" style="display: none;">
+                <strong>Modèle sélectionné :</strong> <span id="selectedModelName"></span>
+            </div>
+        </section>
+
+        <!-- Sélection du type d'instance -->
+        <section class="instance-selection">
+            <h2>Choisissez le type d'instance EC2</h2>
+            <p class="helper-text">
+                Tu as accès aux familles <strong>T</strong> et <strong>g4dn</strong>.  
+                Pour avoir le GPU NVIDIA actif, commence par <code>g4dn.xlarge</code>.
+                Le premier démarrage peut prendre 10 à 30 minutes selon l'instance et le modèle.
+            </p>
+
+            <h3 class="instance-family-title">Famille T – généraliste (sans GPU)</h3>
+            <div class="instance-grid">
+                <div class="instance-card" data-instance="t3.small">
+                    <h4>t3.small</h4>
+                    <p class="instance-desc">2 vCPU • 2 GiB RAM</p>
+                    <span class="instance-tag">T • petit test</span>
+                </div>
+
+                <div class="instance-card" data-instance="t3.medium">
+                    <h4>t3.medium</h4>
+                    <p class="instance-desc">2 vCPU • 4 GiB RAM</p>
+                    <span class="instance-tag">T • CPU uniquement</span>
+                </div>
+
+                <div class="instance-card" data-instance="t3.large">
+                    <h4>t3.large</h4>
+                    <p class="instance-desc">2 vCPU • 8 GiB RAM</p>
+                    <span class="instance-tag">T • plus de RAM</span>
+                </div>
+
+                <div class="instance-card" data-instance="t3.xlarge">
+                    <h4>t3.xlarge</h4>
+                    <p class="instance-desc">4 vCPU • 16 GiB RAM</p>
+                    <span class="instance-tag">T • charge sérieuse</span>
+                </div>
+
+                <div class="instance-card" data-instance="t3.2xlarge">
+                    <h4>t3.2xlarge</h4>
+                    <p class="instance-desc">8 vCPU • 32 GiB RAM</p>
+                    <span class="instance-tag">T • lourd / prod</span>
+                </div>
+
+            </div>
+
+            <h3 class="instance-family-title">Famille g4dn – GPU</h3>
+            <div class="instance-grid">
+                <div class="instance-card" data-instance="g4dn.xlarge">
+                    <h4>g4dn.xlarge</h4>
+                    <p class="instance-desc">1 GPU • 4 vCPU • 16 GiB</p>
+                    <span class="instance-tag">GPU • recommandé</span>
+                </div>
+
+                <div class="instance-card" data-instance="g4dn.2xlarge">
+                    <h4>g4dn.2xlarge</h4>
+                    <p class="instance-desc">1 GPU • 8 vCPU • 32 GiB</p>
+                    <span class="instance-tag">GPU • plus de CPU/RAM</span>
+                </div>
+
+                <div class="instance-card" data-instance="g4dn.4xlarge">
+                    <h4>g4dn.4xlarge</h4>
+                    <p class="instance-desc">1 GPU • 16 vCPU • 64 GiB</p>
+                    <span class="instance-tag">GPU • gros workload</span>
+                </div>
+
+                <div class="instance-card" data-instance="g4dn.8xlarge">
+                    <h4>g4dn.8xlarge</h4>
+                    <p class="instance-desc">1 GPU • 32 vCPU • 128 GiB</p>
+                    <span class="instance-tag">GPU • très costaud</span>
+                </div>
+            </div>
+
+            <div id="selectedInstance" class="selected-info" style="display: none;">
+                <strong>Instance sélectionnée :</strong> <span id="selectedInstanceName"></span>
+            </div>
+        </section>
+
+        <!-- Boutons d'action -->
+        <section class="actions">
+            <button id="deployBtn" class="primary-btn">🚀 Déployer</button>
+            <button id="destroyBtn" class="secondary-btn">💣 Détruire</button>
+        </section>
+
+        <!-- Statut IA -->
+        <section id="iaStatus" class="ia-status">
+            IA non déployée.
+        </section>
+
+        <!-- Console de logs -->
+        <section id="logsSection" class="logs-section" style="display: none;">
+            <h2>Console de déploiement</h2>
+            <div id="logs" class="logs-console"></div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

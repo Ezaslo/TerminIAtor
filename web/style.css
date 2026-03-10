@@ -1,0 +1,505 @@
+:root {
+  --neon-blue: #00f2fe;
+  --neon-pink: #ff00aa;
+  --neon-purple: #8a2be2;
+  --neon-green: #00ff87;
+  --neon-orange: #ff6b00;
+  --dark-bg: #020617;
+  --darker-bg: #00020a;
+  --glass-bg: rgba(2, 6, 23, 0.7);
+  --glass-border: rgba(0, 242, 254, 0.15);
+  --text-primary: #e5e7eb;
+  --text-secondary: #9ca3af;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+@font-face {
+  font-family: 'Cyber';
+  src: url('https://fonts.cdnfonts.com/css/cyberpunk') format('woff2');
+}
+
+body {
+  min-height: 100vh;
+  background: var(--dark-bg);
+  background-image:
+    radial-gradient(at 15% 25%, var(--neon-blue) 0px, transparent 35%),
+    radial-gradient(at 85% 75%, var(--neon-pink) 0px, transparent 45%),
+    linear-gradient(to bottom,
+      rgba(0, 20, 50, 0.4) 0%,
+      rgba(10, 5, 30, 0.9) 50%,
+      rgba(2, 6, 17, 1) 100%);
+  color: var(--text-primary);
+  font-family: 'Cyber', 'Orbitron', 'Rajdhani', sans-serif;
+  overflow-x: hidden;
+  position: relative;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    linear-gradient(45deg,
+      transparent 48%,
+      rgba(0, 242, 254, 0.015) 50%,
+      transparent 52%),
+    linear-gradient(-45deg,
+      transparent 48%,
+      rgba(255, 0, 170, 0.015) 50%,
+      transparent 52%);
+  background-size: 80px 80px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 3rem 2rem;
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+/* Titre futuriste simplifié */
+h1 {
+  font-size: 5rem;
+  margin: 0 auto;
+  background: linear-gradient(
+    135deg,
+    var(--neon-blue) 0%,
+    var(--neon-pink) 50%,
+    var(--neon-purple) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-align: center;
+  text-shadow:
+    0 0 10px rgba(0, 242, 254, 0.5),
+    0 0 20px rgba(255, 0, 170, 0.3);
+  letter-spacing: -0.03em;
+  position: relative;
+  animation:
+    glow 2.5s ease-in-out infinite alternate,
+    float 6s ease-in-out infinite;
+  transform-style: preserve-3d;
+}
+
+@keyframes glow {
+  0% {
+    text-shadow:
+      0 0 10px rgba(0, 242, 254, 0.4),
+      0 0 20px rgba(255, 0, 170, 0.2);
+  }
+  100% {
+    text-shadow:
+      0 0 20px rgba(0, 242, 254, 0.8),
+      0 0 40px rgba(255, 0, 170, 0.6),
+      0 0 60px rgba(138, 43, 226, 0.4);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotateX(0deg); }
+  50% { transform: translateY(-8px) rotateX(5deg); }
+}
+
+/* Effet de contour néon */
+h1::before {
+  content: "";
+  position: absolute;
+  bottom: -10px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    var(--neon-blue),
+    var(--neon-pink),
+    var(--neon-purple));
+  border-radius: 50%;
+  animation: scan 3s linear infinite;
+}
+
+@keyframes scan {
+  0% { width: 0%; opacity: 0; }
+  50% { opacity: 1; }
+  100% { width: 100%; opacity: 0; }
+}
+
+/* Effet de particules autour du titre */
+h1::after {
+  content: "";
+  position: absolute;
+  top: -20px;
+  left: -30px;
+  right: -30px;
+  bottom: -20px;
+  background:
+    radial-gradient(circle at 20% 30%, var(--neon-blue) 1px, transparent 1px),
+    radial-gradient(circle at 80% 70%, var(--neon-pink) 1px, transparent 1px),
+    radial-gradient(circle at 50% 20%, var(--neon-purple) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.3;
+  z-index: -1;
+  border-radius: 50%;
+  animation: particles 4s linear infinite;
+}
+
+@keyframes particles {
+  0% { transform: scale(1); opacity: 0.3; }
+  50% { opacity: 0.7; }
+  100% { transform: scale(1.1); opacity: 0.3; }
+}
+
+/* Le reste du CSS reste identique à la version précédente */
+#chat {
+  flex: 1;
+  overflow-y: auto;
+  margin: 1rem 0;
+  padding: 2rem;
+  background: var(--glass-bg);
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px) saturate(180%);
+  box-shadow:
+    0 0 40px rgba(0, 242, 254, 0.1),
+    inset 0 1px 2px rgba(255, 255, 255, 0.1);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-blue) var(--darker-bg);
+}
+
+#chat::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  right: -3px;
+  bottom: -3px;
+  background: linear-gradient(
+    90deg,
+    var(--neon-blue),
+    var(--neon-pink),
+    var(--neon-purple),
+    var(--neon-green),
+    var(--neon-blue));
+  z-index: -1;
+  border-radius: 22px;
+  opacity: 0.2;
+  animation: borderPulse 8s linear infinite;
+  background-size: 400% 400%;
+}
+
+@keyframes borderPulse {
+  0% { background-position: 0% 50%; opacity: 0.1; }
+  50% { background-position: 100% 50%; opacity: 0.3; }
+  100% { background-position: 0% 50%; opacity: 0.1; }
+}
+
+.message {
+  max-width: 85%;
+  padding: 1.2rem 1.8rem;
+  border-radius: 15px;
+  position: relative;
+  animation: fadeInUp 0.6s cubic-bezier(0.2, 0.8, 0.4, 1) both;
+  box-shadow:
+    0 5px 15px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(0, 242, 254, 0.1);
+  border: 1px solid rgba(0, 242, 254, 0.1);
+  transition: all 0.3s ease;
+}
+
+.message:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 8px 25px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(0, 242, 254, 0.2);
+}
+
+.user-message {
+  align-self: flex-end;
+  background: linear-gradient(
+    145deg,
+    rgba(0, 242, 254, 0.15) 0%,
+    rgba(10, 20, 50, 0.6) 100%);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  color: var(--text-primary);
+  border-top-right-radius: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.user-message::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, var(--neon-blue), var(--neon-pink));
+  animation: messageGlow 3s linear infinite;
+}
+
+.user-message::after {
+  content: ">>";
+  position: absolute;
+  top: -10px;
+  right: 10px;
+  color: var(--neon-blue);
+  font-size: 1.5rem;
+  opacity: 0.3;
+}
+
+.bot-message {
+  align-self: flex-start;
+  background: linear-gradient(
+    145deg,
+    rgba(10, 20, 50, 0.7) 0%,
+    rgba(0, 242, 254, 0.08) 100%);
+  border: 1px solid rgba(138, 43, 226, 0.2);
+  color: var(--text-primary);
+  border-top-left-radius: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.bot-message::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, var(--neon-purple), var(--neon-green));
+  animation: messageGlow 4s linear infinite reverse;
+}
+
+.bot-message::after {
+  content: "<<";
+  position: absolute;
+  top: -10px;
+  left: 10px;
+  color: var(--neon-purple);
+  font-size: 1.5rem;
+  opacity: 0.3;
+}
+
+@keyframes messageGlow {
+  0% { opacity: 0.3; width: 0%; }
+  50% { opacity: 1; width: 100%; }
+  100% { opacity: 0.3; width: 0%; }
+}
+
+.message-time {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 0.8rem;
+  text-align: right;
+  opacity: 0.7;
+  font-family: 'Courier New', monospace;
+}
+
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem 1.5rem;
+  background: rgba(10, 20, 50, 0.5);
+  border-radius: 15px;
+  border: 1px solid rgba(138, 43, 226, 0.2);
+  align-self: flex-start;
+  backdrop-filter: blur(8px);
+}
+
+.typing-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--neon-blue);
+  border-radius: 50%;
+  animation: typing 1.4s infinite ease-in-out;
+  box-shadow: 0 0 5px rgba(0, 242, 254, 0.7);
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+  background: var(--neon-pink);
+  box-shadow: 0 0 5px rgba(255, 0, 170, 0.7);
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+  background: var(--neon-purple);
+  box-shadow: 0 0 5px rgba(138, 43, 226, 0.7);
+}
+
+@keyframes typing {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-8px); }
+}
+
+.input-area {
+  display: flex;
+  gap: 1rem;
+  margin-top: auto;
+  padding: 1.5rem;
+  background: rgba(10, 20, 50, 0.5);
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 0 30px rgba(0, 242, 254, 0.1),
+    inset 0 1px 2px rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.input-area::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  background: linear-gradient(
+    90deg,
+    var(--neon-blue),
+    var(--neon-pink),
+    var(--neon-purple));
+  z-index: -1;
+  border-radius: 22px;
+  opacity: 0.15;
+  animation: inputBorderPulse 6s linear infinite;
+  background-size: 300% 300%;
+}
+
+@keyframes inputBorderPulse {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+
+#prompt {
+  flex: 1;
+  padding: 1.2rem 1.8rem;
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid var(--glass-border);
+  border-radius: 15px;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  outline: none;
+  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.4, 1);
+  box-shadow: inset 0 0 10px rgba(0, 242, 254, 0.1);
+  font-family: 'Courier New', monospace;
+}
+
+#prompt:focus {
+  border-color: var(--neon-blue);
+  box-shadow:
+    0 0 15px rgba(0, 242, 254, 0.3),
+    inset 0 0 15px rgba(0, 242, 254, 0.1);
+  background: rgba(2, 6, 23, 0.7);
+}
+
+#prompt::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+#send-btn {
+  padding: 1.2rem 2.5rem;
+  background: linear-gradient(
+    135deg,
+    var(--neon-blue) 0%,
+    var(--neon-pink) 100%);
+  color: #020617;
+  border: none;
+  border-radius: 15px;
+  font-weight: 700;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.4, 1);
+  box-shadow:
+    0 0 20px rgba(0, 242, 254, 0.3),
+    0 5px 15px rgba(0, 0, 0, 0.3);
+  position: relative;
+  overflow: hidden;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+#send-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.3),
+    transparent);
+  transition: 0.6s;
+}
+
+#send-btn:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 0 30px rgba(0, 242, 254, 0.5),
+    0 8px 25px rgba(0, 0, 0, 0.4);
+}
+
+#send-btn:hover::before {
+  left: 100%;
+}
+
+#send-btn:active {
+  transform: translateY(1px);
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) rotateX(10deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotateX(0deg);
+  }
+}
+
+@media (max-width: 768px) {
+  h1 {
+    font-size: 3rem;
+  }
+
+  .container {
+    padding: 1.5rem;
+    gap: 1.5rem;
+  }
+
+  .input-area {
+    flex-direction: column;
+  }
+
+  #send-btn {
+    width: 100%;
+  }
+
+  .message {
+    max-width: 90%;
+    padding: 1rem 1.2rem;
+  }
+}
