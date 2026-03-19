@@ -1,7 +1,7 @@
 variable "project" {
   description = "Nom du projet (taggage des ressources)"
   type        = string
-  default     = "ai-demo"
+  default     = "terminiator"
 }
 
 variable "aws_region" {
@@ -93,4 +93,23 @@ variable "allowed_cidr" {
   description = "CIDR autorise a acceder a l'IA (par ex. ton IP publique /32)"
   type        = string
   default     = "0.0.0.0/0" # pour tester; ensuite tu pourras mettre ton IP
+}
+
+variable "owui_name" {
+  description = "Nom affiche du compte admin OpenWebUI"
+  type        = string
+  default     = "Admin"
+}
+
+variable "owui_email" {
+  description = "Email du compte admin OpenWebUI (utilise comme identifiant de connexion)"
+  type        = string
+  default     = ""
+}
+
+variable "owui_password" {
+  description = "Mot de passe du compte admin OpenWebUI"
+  type        = string
+  default     = ""
+  sensitive   = true
 }

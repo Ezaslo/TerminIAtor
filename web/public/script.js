@@ -250,6 +250,20 @@ function setupDeployButton() {
 
   deployBtn.addEventListener('click', async () => {
     if (!selectedModel || !selectedInstanceType || isDeploying) return;
+
+    const owuiName = (document.getElementById('owuiName')?.value || '').trim();
+    const owuiEmail = (document.getElementById('owuiEmail')?.value || '').trim();
+    const owuiPassword = (document.getElementById('owuiPassword')?.value || '');
+
+    if (!owuiEmail || !owuiPassword) {
+      alert('Remplis l\'email et le mot de passe OpenWebUI avant de deployer.');
+      return;
+    }
+    if (owuiPassword.length < 8) {
+      alert('Le mot de passe OpenWebUI doit faire au moins 8 caracteres.');
+      return;
+    }
+
     resetUiForNewOperation('deploy');
     isDeploying = true;
     deployBtn.disabled = true;
@@ -268,7 +282,10 @@ function setupDeployButton() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aiChoice: selectedModel,
-          instanceType: selectedInstanceType
+          instanceType: selectedInstanceType,
+          owuiName: owuiName || 'Admin',
+          owuiEmail,
+          owuiPassword
         })
       });
 

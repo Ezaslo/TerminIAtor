@@ -190,6 +190,78 @@ function getReadinessBudget(instanceType) {
   return { maxAttempts: 360, delayMs: 5000 }; // 30 min
 }
 
+function createOpenWebUiAccount(ip, owuiName, owuiEmail, owuiPassword) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      name: owuiName,
+      email: owuiEmail,
+      password: owuiPassword
+    });
+
+    const reqOptions = {
+      hostname: ip,
+      port: 3000,
+      path: '/api/v1/auths/signup',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 10000
+    };
+
+    const req = http.request(reqOptions, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        resolve({ statusCode: res.statusCode, body: raw });
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function autoSignupOpenWebUi(ip, owuiName, owuiEmail, owuiPassword) {
+  pushLog(`Creation du compte admin OpenWebUI (${owuiEmail})...`, 'info');
+
+  for (let attempt = 1; attempt <= 15; attempt++) {
+    try {
+      const result = await createOpenWebUiAccount(ip, owuiName, owuiEmail, owuiPassword);
+
+      if (result.statusCode === 200 || result.statusCode === 201) {
+        pushLog(`Compte admin OpenWebUI cree avec succes (${owuiEmail})`, 'success');
+        return true;
+      }
+
+      // Si le compte existe deja
+      if (result.body && result.body.toLowerCase().includes('already')) {
+        pushLog(`Le compte OpenWebUI (${owuiEmail}) existe deja`, 'info');
+        return true;
+      }
+
+      pushLog(
+        `Signup tentative ${attempt}/15 echouee (HTTP ${result.statusCode}): ${result.body}`,
+        'info'
+      );
+    } catch (e) {
+      pushLog(
+        `Signup tentative ${attempt}/15 erreur: ${e.message}`,
+        'info'
+      );
+    }
+
+    await sleep(3000);
+  }
+
+  pushLog('Impossible de creer le compte admin OpenWebUI apres 15 tentatives', 'error');
+  return false;
+}
+
 async function waitForIaReady(ip, instanceType, expectedModel = null) {
   const ollamaUrl = `http://${ip}:11434/api/version`;
   const ollamaTagsUrl = `http://${ip}:11434/api/tags`;
@@ -237,7 +309,7 @@ async function waitForIaReady(ip, instanceType, expectedModel = null) {
 }
 
 app.post('/api/deploy', async (req, res) => {
-  const { aiChoice, instanceType } = req.body;
+  const { aiChoice, instanceType, owuiName, owuiEmail, owuiPassword } = req.body;
 
   if (currentOperation.status === 'running') {
     return res.status(409).json({
@@ -250,10 +322,15 @@ app.post('/api/deploy', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'aiChoice manquant' });
   }
 
+  if (!owuiEmail || !owuiPassword) {
+    return res.status(400).json({ ok: false, error: 'Email et mot de passe OpenWebUI requis' });
+  }
+
   const finalInstanceType =
     typeof instanceType === 'string' && instanceType.trim() !== ''
       ? instanceType.trim()
       : 'g4dn.xlarge';
+  const finalOwuiName = typeof owuiName === 'string' && owuiName.trim() !== '' ? owuiName.trim() : 'Admin';
   const expectedModel = AI_PULL_MAP[aiChoice] || null;
 
   try {
@@ -267,6 +344,7 @@ app.post('/api/deploy', async (req, res) => {
       `Nouveau deployment (ai_choice=${aiChoice}, instance_type=${finalInstanceType})`,
       'info'
     );
+    pushLog(`Compte OpenWebUI: ${owuiEmail}`, 'info');
     if (expectedModel) {
       pushLog(`Modele attendu cote Ollama: ${expectedModel}`, 'info');
     }
@@ -274,7 +352,10 @@ app.post('/api/deploy', async (req, res) => {
     const tfvarsPath = path.join(TERRAFORM_DIR, 'terraform.tfvars');
     const tfvarsContent =
       `ai_choice = "${aiChoice}"\n` +
-      `instance_type = "${finalInstanceType}"\n`;
+      `instance_type = "${finalInstanceType}"\n` +
+      `owui_name = "${finalOwuiName}"\n` +
+      `owui_email = "${owuiEmail}"\n` +
+      `owui_password = "${owuiPassword}"\n`;
     fs.writeFileSync(tfvarsPath, tfvarsContent);
 
     pushLog(
@@ -288,7 +369,10 @@ app.post('/api/deploy', async (req, res) => {
       'apply',
       '-auto-approve',
       `-var=ai_choice=${aiChoice}`,
-      `-var=instance_type=${finalInstanceType}`
+      `-var=instance_type=${finalInstanceType}`,
+      `-var=owui_name=${finalOwuiName}`,
+      `-var=owui_email=${owuiEmail}`,
+      `-var=owui_password=${owuiPassword}`
     ]);
 
     const ipOutput = spawnSync('terraform', ['output', '-raw', 'ec2_public_ip'], {
@@ -316,6 +400,12 @@ app.post('/api/deploy', async (req, res) => {
           ok: false,
           error: 'Deploy interrompu pour permettre la destruction'
         });
+      }
+
+      // Creer le compte admin OpenWebUI maintenant que l'API est prete
+      if (readiness.ready && owuiEmail && owuiPassword) {
+        currentOperation.phase = 'signup';
+        await autoSignupOpenWebUi(ip, finalOwuiName, owuiEmail, owuiPassword);
       }
     } else {
       pushLog('Impossible de recuperer ec2_public_ip', 'error');
