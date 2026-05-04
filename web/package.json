@@ -1,11 +1,12 @@
 {
   "name": "terraform-ai-deployer",
   "version": "1.0.0",
-  "description": "Interface web pour déployer des modèles IA sur AWS avec Terraform",
+  "description": "Interface web pour deployer Ollama et OpenWebUI sur AWS avec Terraform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "check": "node --check server.js && node --check public/script.js"
   },
   "keywords": [
     "terraform",
@@ -13,11 +14,15 @@
     "ai",
     "deployment"
   ],
-  "author": "Ton nom",
+  "author": "Ezaslo",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "body-parser": "^2.2.1",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.22.1"
   },
   "devDependencies": {

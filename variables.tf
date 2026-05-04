@@ -49,6 +49,40 @@ variable "instance_type" {
   default     = "g4dn.xlarge"
 }
 
+variable "workspace_name" {
+  description = "Nom lisible de la session d'equipe"
+  type        = string
+  default     = "Session IA"
+}
+
+variable "workspace_slug" {
+  description = "Identifiant court de la session"
+  type        = string
+  default     = "session-ia"
+}
+
+variable "session_ttl_hours" {
+  description = "Duree cible de la session en heures"
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.session_ttl_hours >= 1 && var.session_ttl_hours <= 168
+    error_message = "session_ttl_hours doit etre compris entre 1 et 168."
+  }
+}
+
+variable "team_size_hint" {
+  description = "Nombre estime d'utilisateurs simultanes"
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.team_size_hint >= 1 && var.team_size_hint <= 200
+    error_message = "team_size_hint doit etre compris entre 1 et 200."
+  }
+}
+
 variable "root_volume_size_gb" {
   description = "Taille minimale du disque root EBS (GiB). Le systeme peut augmenter selon le modele choisi."
   type        = number
@@ -90,9 +124,72 @@ variable "ai_choice" {
 }
 
 variable "allowed_cidr" {
-  description = "CIDR autorise a acceder a l'IA (par ex. ton IP publique /32)"
+  description = "CIDR IPv4 autorise a acceder a la session (proxy d'entreprise, VPN ou IP publique /32). Ne pas utiliser 0.0.0.0/0."
   type        = string
-  default     = "0.0.0.0/0" # pour tester; ensuite tu pourras mettre ton IP
+
+  validation {
+    condition     = can(cidrhost(var.allowed_cidr, 0)) && var.allowed_cidr != "0.0.0.0/0"
+    error_message = "allowed_cidr doit etre un CIDR valide et plus restrictif que 0.0.0.0/0, par exemple 203.0.113.10/32."
+  }
+}
+
+variable "workspace_url" {
+  description = "URL publique de la session si un proxy/SSO d'entreprise est place devant OpenWebUI"
+  type        = string
+  default     = ""
+}
+
+variable "auth_mode" {
+  description = "Mode d'acces a la session: local_admin ou trusted_header"
+  type        = string
+  default     = "local_admin"
+
+  validation {
+    condition     = contains(["local_admin", "trusted_header"], var.auth_mode)
+    error_message = "auth_mode doit valoir local_admin ou trusted_header."
+  }
+}
+
+variable "webui_secret_key" {
+  description = "Secret de session OpenWebUI partage par toutes les instances"
+  type        = string
+  sensitive   = true
+}
+
+variable "trusted_email_header" {
+  description = "Header HTTP qui porte l'email utilisateur dans le mode trusted_header"
+  type        = string
+  default     = "X-User-Email"
+}
+
+variable "trusted_name_header" {
+  description = "Header HTTP qui porte le nom utilisateur dans le mode trusted_header"
+  type        = string
+  default     = "X-User-Name"
+}
+
+variable "trusted_groups_header" {
+  description = "Header HTTP qui porte les groupes utilisateur dans le mode trusted_header"
+  type        = string
+  default     = "X-User-Groups"
+}
+
+variable "trusted_role_header" {
+  description = "Header HTTP qui porte le role utilisateur dans le mode trusted_header"
+  type        = string
+  default     = "X-User-Role"
+}
+
+variable "ollama_image" {
+  description = "Image Docker Ollama pinnee pour des deploiements reproductibles"
+  type        = string
+  default     = "ollama/ollama:0.21.0"
+}
+
+variable "open_webui_image" {
+  description = "Image Docker OpenWebUI pinnee pour des deploiements reproductibles"
+  type        = string
+  default     = "ghcr.io/open-webui/open-webui:v0.8.12"
 }
 
 variable "owui_name" {
@@ -108,7 +205,7 @@ variable "owui_email" {
 }
 
 variable "owui_password" {
-  description = "Mot de passe du compte admin OpenWebUI"
+  description = "Mot de passe du compte admin OpenWebUI de bootstrap"
   type        = string
   default     = ""
   sensitive   = true

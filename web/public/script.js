@@ -3,6 +3,9 @@ let selectedInstanceType = null;
 let isDeploying = false;
 let isDestroying = false;
 let eventSource = null;
+let sessionRefreshInterval = null;
+let ipAutoCidrApplied = false;
+let lastSubmittedSession = null;
 
 const MODEL_CATALOG = [
   {
@@ -33,22 +36,91 @@ const MODEL_CATALOG = [
   }
 ];
 
+function getAdminToken() {
+  return localStorage.getItem('terminiatorAdminToken') || '';
+}
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json' };
+}
+
+function isValidIPv4Cidr(cidr) {
+  if (typeof cidr !== 'string') return false;
+  const value = cidr.trim();
+  const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}\/(\d{1,2})$/);
+  if (!match || value === '0.0.0.0/0') return false;
+
+  const parts = value.split('/');
+  const octets = parts[0].split('.').map((part) => Number.parseInt(part, 10));
+  const prefix = Number.parseInt(parts[1], 10);
+
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) &&
+    Number.isInteger(prefix) &&
+    prefix >= 0 &&
+    prefix <= 32
+  );
+}
+
+function isValidUrl(value) {
+  if (typeof value !== 'string' || value.trim() === '') return true;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+async function detectPublicCidr() {
+  const allowedCidrInput = document.getElementById('allowedCidr');
+  if (!allowedCidrInput || allowedCidrInput.value.trim() !== '' || ipAutoCidrApplied) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/public-cidr');
+    if (!response.ok) return;
+    const data = await response.json();
+    const cidr = typeof data.cidr === 'string' ? data.cidr.trim() : '';
+    if (!cidr) return;
+
+    allowedCidrInput.value = cidr;
+    localStorage.setItem('allowedCidr', allowedCidrInput.value);
+    ipAutoCidrApplied = true;
+  } catch (_) {
+    // fallback to manual entry in advanced settings
+  }
+}
+
+function addLog(message, type = 'info') {
+  handleLog({
+    message,
+    type,
+    timestamp: new Date().toISOString()
+  });
+}
+
 function connectLogStream() {
   if (eventSource) return;
-
-  eventSource = new EventSource('http://localhost:3001/api/stream');
+  eventSource = new EventSource('/api/stream');
 
   eventSource.onmessage = (event) => {
     try {
       const log = JSON.parse(event.data);
       handleLog(log);
-    } catch (e) {
-      console.error('Log SSE invalide', e, event.data);
+    } catch (error) {
+      console.error('Log SSE invalide', error, event.data);
     }
   };
 
-  eventSource.onerror = (err) => {
-    console.error('Erreur SSE', err);
+  eventSource.onerror = (error) => {
+    console.error('Erreur SSE', error);
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
   };
 }
 
@@ -66,47 +138,12 @@ function handleLog(log) {
   if (logsSection && logsSection.style.display === 'none') {
     logsSection.style.display = 'block';
   }
-
-  const iaStatus = document.getElementById('iaStatus');
-  if (!iaStatus) return;
-
-  if (
-    log.type === 'info' &&
-    (log.message.includes('Test de disponibilite IA') ||
-      log.message.includes('Test Ollama'))
-  ) {
-    iaStatus.classList.remove('ready');
-    iaStatus.classList.add('loading');
-    iaStatus.innerHTML = '<span class="spinner"></span> Deploiement IA en cours (10 a 30 minutes possibles)...';
-  }
-
-  if (log.type === 'ia-ready') {
-    iaStatus.classList.remove('loading');
-    iaStatus.classList.add('ready');
-
-    const match = log.message.match(/http:\/\/[^\s]+/);
-    const url = match ? match[0] : null;
-
-    if (url) {
-      iaStatus.innerHTML = `IA prete : <a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
-    } else {
-      iaStatus.textContent = 'IA prete';
-    }
-  }
-}
-
-function addLog(message, type = 'info') {
-  handleLog({
-    message,
-    type,
-    timestamp: new Date().toISOString()
-  });
 }
 
 function resetUiForNewOperation(op) {
   const logsDiv = document.getElementById('logs');
   const logsSection = document.getElementById('logsSection');
-  const iaStatus = document.getElementById('iaStatus');
+  const summary = document.getElementById('sessionSummary');
 
   if (logsDiv) {
     logsDiv.innerHTML = '';
@@ -116,16 +153,164 @@ function resetUiForNewOperation(op) {
     logsSection.style.display = 'block';
   }
 
-  if (iaStatus) {
-    iaStatus.classList.remove('loading', 'ready');
+  if (!summary) return;
 
-    if (op === 'deploy') {
-      iaStatus.textContent = 'Deploiement en cours...';
-    } else if (op === 'destroy') {
-      iaStatus.textContent = 'Destruction en cours...';
-    } else {
-      iaStatus.textContent = 'IA non deployee.';
+  summary.classList.remove('ready');
+  if (op === 'deploy') {
+    summary.textContent = 'Creation de la session en cours...';
+  } else if (op === 'destroy') {
+    summary.textContent = 'Destruction de la session en cours...';
+  } else {
+    summary.textContent = 'Aucune session active.';
+  }
+}
+
+function formatDateTime(iso) {
+  if (!iso) return 'n/a';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'n/a';
+  return date.toLocaleString();
+}
+
+function normalizeOperationType(type) {
+  return type || 'idle';
+}
+
+function applyOperationState(operation = {}) {
+  const deployBtn = document.getElementById('deployBtn');
+  const openSessionBtn = document.getElementById('openSessionBtn');
+  const destroyBtn = document.getElementById('destroyBtn');
+  const normalizedType = normalizeOperationType(operation.type);
+  const isRunning = operation.status === 'running';
+
+  isDeploying = isRunning && normalizedType === 'deploy';
+  isDestroying = isRunning && normalizedType === 'destroy';
+
+  if (deployBtn) {
+    deployBtn.disabled = isRunning;
+    deployBtn.classList.toggle('running', isDeploying);
+    deployBtn.textContent = isDeploying ? 'Creation en cours...' : 'Creer la session';
+  }
+
+  if (openSessionBtn) {
+    openSessionBtn.disabled = true;
+  }
+
+  if (destroyBtn) {
+    destroyBtn.disabled = isRunning;
+    destroyBtn.classList.toggle('running', isDestroying);
+    destroyBtn.textContent = isDestroying ? 'Destruction en cours...' : 'Detruire la session et le reseau';
+  }
+}
+
+function humanizeErrorMessage(errorText) {
+  if (!errorText) return 'Erreur cote backend. Regarde le journal.';
+  if (errorText.includes('trusted_header')) {
+    return 'Le mode sans mot de passe demande un proxy ou un SSO d entreprise deja configure.';
+  }
+  if (errorText.includes('allowedCidr')) {
+    return 'Le reseau autorise est invalide. Reessaie avec l adresse detectee automatiquement ou un /32 connu.';
+  }
+  if (errorText.includes('Terraform introuvable')) {
+    return 'Terraform est introuvable sur le serveur TerminIAtor.';
+  }
+  if (errorText.includes('VcpuLimitExceeded')) {
+    return 'Le quota AWS de vCPU est insuffisant pour cette machine.';
+  }
+  if (errorText.includes('OpenWebUI')) {
+    return 'La session AWS est creee mais OpenWebUI n est pas encore disponible.';
+  }
+  return errorText;
+}
+
+function renderSessionSummary(session, draftSession = null, operation = {}) {
+  const summary = document.getElementById('sessionSummary');
+  if (!summary) return;
+
+  const fallbackSession = lastSubmittedSession || {};
+  const fallbackDraft = draftSession || fallbackSession;
+  const isRunning = operation.status === 'running';
+  if ((!session || !session.active) && !isRunning && !fallbackDraft) {
+    summary.classList.remove('ready');
+    summary.innerHTML = 'Aucune session active.';
+    return;
+  }
+
+  summary.classList.add('ready');
+  const statusLabel = isRunning
+      ? operation.type === 'destroy'
+      ? 'Destruction en cours'
+      : (session && session.status === 'provisioning') ||
+        (fallbackDraft && fallbackDraft.status === 'provisioning')
+        ? 'Session en preparation'
+        : 'Creation en cours'
+    : (session && session.status) === 'ready'
+      ? 'Session active'
+      : (session && session.status) === 'provisioning'
+      ? 'Session en preparation'
+      : fallbackDraft && fallbackDraft.status === 'provisioning'
+      ? 'Session en preparation'
+      : 'Session';
+  const isReady =
+    (session && session.status === 'ready') ||
+    (!isRunning && session && session.active && session.status !== 'provisioning');
+  const rawAccessUrl =
+    (session && session.accessUrl) || (fallbackDraft && fallbackDraft.accessUrl) || null;
+  const access = isReady && rawAccessUrl
+    ? `<a href="${rawAccessUrl}" target="_blank" rel="noopener noreferrer">${rawAccessUrl}</a>`
+    : isRunning
+      ? 'Le lien sera utilisable quand la session sera prete.'
+      : rawAccessUrl || 'URL indisponible';
+  const effectiveName =
+    (session && session.workspaceName) || (fallbackDraft && fallbackDraft.workspaceName) || 'Session IA';
+  const effectiveMode =
+    (session && session.authMode) || (fallbackDraft && fallbackDraft.authMode) || 'local_admin';
+  const effectiveTeamSize =
+    (session && session.teamSizeHint) || (fallbackDraft && fallbackDraft.teamSizeHint) || 'n/a';
+  const effectiveExpiresAt =
+    (session && session.expiresAt) || (fallbackDraft && fallbackDraft.expiresAt) || null;
+  const effectiveInstance =
+    (session && session.instanceType) || (fallbackDraft && fallbackDraft.instanceType) || 'n/a';
+  const effectiveModel =
+    (session && session.modelLabel) || (fallbackDraft && fallbackDraft.modelLabel) || 'n/a';
+  const effectiveAdminEmail =
+    (session && session.adminEmail) || (fallbackDraft && fallbackDraft.adminEmail) || 'n/a';
+  const effectiveNotes =
+    (session && session.accessNotes) || (fallbackDraft && fallbackDraft.accessNotes) || '';
+  const autoOpenAvailable = Boolean(session && session.autoOpenAvailable);
+  const proxyUrl = (session && session.proxyUrl) || null;
+  summary.innerHTML =
+    `<strong>${statusLabel}</strong><br>` +
+    `Nom : ${effectiveName}<br>` +
+    `Acces : ${access}<br>` +
+    `Mode : ${effectiveMode === 'trusted_header' ? 'SSO / proxy entreprise' : 'Compte admin local'}<br>` +
+    `Machine : ${effectiveInstance}<br>` +
+    `Modele : ${effectiveModel}<br>` +
+    `Admin : ${effectiveAdminEmail}<br>` +
+    `Equipe : ${effectiveTeamSize} utilisateur(s)<br>` +
+    `Expire : ${formatDateTime(effectiveExpiresAt)}` +
+    (autoOpenAvailable && proxyUrl ? `<br>Passerelle locale : ${proxyUrl}` : '') +
+    (effectiveNotes ? `<br>Acces : ${effectiveNotes}` : '');
+
+  const openSessionBtn = document.getElementById('openSessionBtn');
+  if (openSessionBtn) {
+    openSessionBtn.disabled = !autoOpenAvailable || isRunning;
+  }
+}
+
+async function refreshSessionSummary() {
+  try {
+    const response = await fetch('/api/session', {
+      method: 'GET'
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data && data.session) {
+      applyOperationState(data.operation || {});
+      renderSessionSummary(data.session, data.draftSession || null, data.operation || {});
     }
+  } catch (_) {
+    // keep previous UI on refresh failures
   }
 }
 
@@ -133,7 +318,6 @@ function renderModelCatalog() {
   const container = document.getElementById('modelCatalog');
   if (!container) return [];
 
-  // Idempotent render: evite les listes dupliquees si l'init est appelee plusieurs fois.
   container.innerHTML = '';
 
   MODEL_CATALOG.forEach((group) => {
@@ -152,7 +336,6 @@ function renderModelCatalog() {
       card.className = 'model-card';
       card.dataset.model = model.id;
       card.innerHTML = `
-        <div class="model-icon"></div>
         <h3>${model.name}</h3>
         <p class="model-desc">${model.pull}</p>
         <span class="model-tag">${model.tag}</span>
@@ -179,18 +362,16 @@ function setupModelSelection() {
   if (!cards.length) return;
 
   const applyModelSelection = (card) => {
-    cards.forEach((c) => c.classList.remove('selected'));
+    cards.forEach((item) => item.classList.remove('selected'));
     card.classList.add('selected');
-
     selectedModel = card.dataset.model;
     selectedModelDiv.style.display = 'block';
     selectedModelNameSpan.textContent = card.querySelector('h3').textContent;
-
     localStorage.setItem('selectedModel', selectedModel);
   };
 
   const savedModel = localStorage.getItem('selectedModel');
-  const initialCard = cards.find((c) => c.dataset.model === savedModel) || cards[0];
+  const initialCard = cards.find((card) => card.dataset.model === savedModel) || cards[0];
   applyModelSelection(initialCard);
 
   if (modelCatalog.dataset.clickBound !== '1') {
@@ -204,112 +385,218 @@ function setupModelSelection() {
 }
 
 function setupInstanceSelection() {
-  const cards = document.querySelectorAll('.instance-card');
+  const cards = Array.from(document.querySelectorAll('.instance-card'));
   const selectedInstanceDiv = document.getElementById('selectedInstance');
   const selectedInstanceNameSpan = document.getElementById('selectedInstanceName');
 
-  if (!cards.length) return;
+  if (!cards.length || !selectedInstanceDiv || !selectedInstanceNameSpan) return;
 
   const savedInstance = localStorage.getItem('selectedInstanceType');
-  let initialCard = null;
+  const initialCard = cards.find((card) => card.dataset.instance === savedInstance)
+    || cards.find((card) => card.dataset.instance === 'g4dn.xlarge')
+    || cards[0];
 
-  if (savedInstance) {
-    initialCard = Array.from(cards).find((c) => c.dataset.instance === savedInstance) || null;
-  }
+  const applyInstanceSelection = (card) => {
+    cards.forEach((item) => item.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedInstanceType = card.dataset.instance;
+    selectedInstanceDiv.style.display = 'block';
+    selectedInstanceNameSpan.textContent = selectedInstanceType;
+    localStorage.setItem('selectedInstanceType', selectedInstanceType);
+  };
 
-  if (!initialCard) {
-    initialCard =
-      Array.from(cards).find((c) => c.dataset.instance === 'g4dn.xlarge') ||
-      cards[0];
-  }
-
-  cards.forEach((c) => c.classList.remove('selected'));
-  initialCard.classList.add('selected');
-
-  selectedInstanceType = initialCard.dataset.instance;
-  selectedInstanceDiv.style.display = 'block';
-  selectedInstanceNameSpan.textContent = selectedInstanceType;
+  applyInstanceSelection(initialCard);
 
   cards.forEach((card) => {
-    card.addEventListener('click', () => {
-      cards.forEach((c) => c.classList.remove('selected'));
-      card.classList.add('selected');
-
-      selectedInstanceType = card.dataset.instance;
-      selectedInstanceDiv.style.display = 'block';
-      selectedInstanceNameSpan.textContent = selectedInstanceType;
-
-      localStorage.setItem('selectedInstanceType', selectedInstanceType);
-    });
+    card.addEventListener('click', () => applyInstanceSelection(card));
   });
+}
+
+function saveFieldOnChange(id) {
+  const input = document.getElementById(id);
+  if (!input) return;
+
+  const saved = localStorage.getItem(id);
+  if (saved !== null) {
+    input.value = saved;
+  }
+
+  input.addEventListener('change', () => {
+    localStorage.setItem(id, input.value.trim());
+  });
+}
+
+function setupPersistentFields() {
+  [
+    'workspaceName',
+    'sessionTtlHours',
+    'teamSizeHint',
+    'allowedCidr',
+    'workspaceUrl',
+    'authMode',
+    'trustedEmailHeader',
+    'trustedNameHeader',
+    'trustedGroupsHeader',
+    'trustedRoleHeader',
+    'owuiName',
+    'owuiEmail'
+  ].forEach(saveFieldOnChange);
+}
+
+function updateAuthModeUi() {
+  const authMode = document.getElementById('authMode')?.value || 'local_admin';
+  const trustedHeaderFields = document.getElementById('trustedHeaderFields');
+  const passwordField = document.getElementById('passwordField');
+  const passwordInput = document.getElementById('owuiPassword');
+
+  if (trustedHeaderFields) {
+    trustedHeaderFields.style.display = authMode === 'trusted_header' ? 'grid' : 'none';
+  }
+
+  if (passwordField) {
+    passwordField.style.display = authMode === 'trusted_header' ? 'none' : 'flex';
+  }
+
+  if (passwordInput) {
+    passwordInput.required = authMode !== 'trusted_header';
+    if (authMode === 'trusted_header') {
+      passwordInput.value = '';
+    }
+  }
+}
+
+function setupAuthMode() {
+  const authMode = document.getElementById('authMode');
+  if (!authMode) return;
+
+  updateAuthModeUi();
+  authMode.addEventListener('change', () => {
+    localStorage.setItem('authMode', authMode.value);
+    updateAuthModeUi();
+  });
+}
+
+function collectDeployPayload() {
+  const authMode = document.getElementById('authMode')?.value || 'local_admin';
+  const payload = {
+    workspaceName: (document.getElementById('workspaceName')?.value || '').trim(),
+    sessionTtlHours: (document.getElementById('sessionTtlHours')?.value || '').trim(),
+    teamSizeHint: (document.getElementById('teamSizeHint')?.value || '').trim(),
+    allowedCidr: (document.getElementById('allowedCidr')?.value || '').trim(),
+    workspaceUrl: (document.getElementById('workspaceUrl')?.value || '').trim(),
+    authMode,
+    trustedEmailHeader: (document.getElementById('trustedEmailHeader')?.value || '').trim(),
+    trustedNameHeader: (document.getElementById('trustedNameHeader')?.value || '').trim(),
+    trustedGroupsHeader: (document.getElementById('trustedGroupsHeader')?.value || '').trim(),
+    trustedRoleHeader: (document.getElementById('trustedRoleHeader')?.value || '').trim(),
+    owuiName: (document.getElementById('owuiName')?.value || '').trim(),
+    owuiEmail: (document.getElementById('owuiEmail')?.value || '').trim(),
+    owuiPassword: document.getElementById('owuiPassword')?.value || '',
+    aiChoice: selectedModel,
+    instanceType: selectedInstanceType
+  };
+
+  return payload;
+}
+
+function validateDeployPayload(payload) {
+  if (!payload.workspaceName) {
+    return 'Renseigne un nom de session.';
+  }
+  if (payload.allowedCidr && !isValidIPv4Cidr(payload.allowedCidr)) {
+    return 'Le CIDR doit etre un IPv4 restrictif, par exemple 203.0.113.10/32.';
+  }
+  if (!isValidUrl(payload.workspaceUrl)) {
+    return 'L URL publique de la session est invalide.';
+  }
+  if (!payload.owuiEmail) {
+    return 'Renseigne l email admin OpenWebUI.';
+  }
+  if (payload.authMode === 'trusted_header' && !payload.workspaceUrl) {
+    return 'Le mode sans mot de passe demande une URL d entreprise ou un proxy deja configure.';
+  }
+  if (payload.authMode === 'local_admin' && payload.owuiPassword.length < 8) {
+    return 'Le mot de passe admin doit faire au moins 8 caracteres.';
+  }
+  if (!selectedModel || !selectedInstanceType) {
+    return 'Choisis un modele et une instance.';
+  }
+  if (!payload.allowedCidr) {
+    return 'Le CIDR n a pas pu etre detecte automatiquement. Ouvre les parametres avances pour le renseigner.';
+  }
+  return null;
 }
 
 function setupDeployButton() {
   const deployBtn = document.getElementById('deployBtn');
   const logsSection = document.getElementById('logsSection');
+  if (!deployBtn) return;
 
   deployBtn.addEventListener('click', async () => {
-    if (!selectedModel || !selectedInstanceType || isDeploying) return;
+    if (isDeploying) return;
 
-    const owuiName = (document.getElementById('owuiName')?.value || '').trim();
-    const owuiEmail = (document.getElementById('owuiEmail')?.value || '').trim();
-    const owuiPassword = (document.getElementById('owuiPassword')?.value || '');
-
-    if (!owuiEmail || !owuiPassword) {
-      alert('Remplis l\'email et le mot de passe OpenWebUI avant de deployer.');
-      return;
-    }
-    if (owuiPassword.length < 8) {
-      alert('Le mot de passe OpenWebUI doit faire au moins 8 caracteres.');
+    const payload = collectDeployPayload();
+    const validationError = validateDeployPayload(payload);
+    if (validationError) {
+      window.alert(validationError);
       return;
     }
 
     resetUiForNewOperation('deploy');
+    lastSubmittedSession = {
+      workspaceName: payload.workspaceName,
+      authMode: payload.authMode,
+      teamSizeHint: Number.parseInt(payload.teamSizeHint, 10) || payload.teamSizeHint,
+      sessionTtlHours: Number.parseInt(payload.sessionTtlHours, 10) || payload.sessionTtlHours,
+      allowedCidr: payload.allowedCidr,
+      status: 'provisioning',
+      expiresAt: null,
+      accessUrl: payload.workspaceUrl || null
+    };
+    localStorage.setItem('lastSubmittedSession', JSON.stringify(lastSubmittedSession));
     isDeploying = true;
     deployBtn.disabled = true;
     deployBtn.classList.add('running');
-    deployBtn.textContent = 'Deploiement en cours...';
+    deployBtn.textContent = 'Creation en cours...';
 
     if (logsSection) {
       logsSection.style.display = 'block';
     }
 
-    addLog(`Deploiement demande (modele=${selectedModel}, instance=${selectedInstanceType})`, 'info');
+    addLog(`Creation demandee pour la session ${payload.workspaceName}`, 'info');
 
     try {
-      const res = await fetch('http://localhost:3001/api/deploy', {
+      const response = await fetch('/api/deploy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aiChoice: selectedModel,
-          instanceType: selectedInstanceType,
-          owuiName: owuiName || 'Admin',
-          owuiEmail,
-          owuiPassword
-        })
+        headers: authHeaders(),
+        body: JSON.stringify(payload)
       });
 
-      if (!res.ok) {
-        let errText = 'Erreur cote backend (deploy). Regarde les logs.';
+      if (!response.ok) {
+        let errorText = 'Erreur cote backend. Regarde le journal.';
         try {
-          const data = await res.json();
-          if (data && data.error) errText = data.error;
+          const data = await response.json();
+          if (data && data.error) errorText = data.error;
         } catch (_) {
-          // ignore JSON parse issue and keep default message
+          // ignore parse errors
         }
-        addLog(`Erreur backend deploy: ${errText}`, 'error');
-        alert(errText);
+        errorText = humanizeErrorMessage(errorText);
+        addLog(`Erreur backend deploy: ${errorText}`, 'error');
+        window.alert(errorText);
       } else {
-        addLog('Commande de deploiement envoyee. Suis la progression dans les logs.', 'success');
+        addLog('Commande envoyee. Suis la progression dans le journal.', 'success');
+        setTimeout(() => {
+          refreshSessionSummary();
+        }, 1000);
       }
-    } catch (e) {
-      addLog(`Erreur de connexion backend : ${e.message}`, 'error');
-      alert('Erreur de connexion au backend.');
+    } catch (error) {
+      addLog(`Erreur de connexion backend : ${error.message}`, 'error');
+      window.alert('Erreur de connexion au backend.');
     } finally {
       isDeploying = false;
       deployBtn.disabled = false;
       deployBtn.classList.remove('running');
-      deployBtn.textContent = 'Deployer';
+      deployBtn.textContent = 'Creer la session';
     }
   });
 }
@@ -317,11 +604,12 @@ function setupDeployButton() {
 function setupDestroyButton() {
   const destroyBtn = document.getElementById('destroyBtn');
   const logsSection = document.getElementById('logsSection');
+  if (!destroyBtn) return;
 
   destroyBtn.addEventListener('click', async () => {
     if (isDestroying) return;
 
-    if (!confirm('Tu es sur de vouloir detruire l\'infrastructure ?')) {
+    if (!window.confirm('Tu vas supprimer la session, la VM et le reseau AWS associe. Continuer ?')) {
       return;
     }
 
@@ -335,35 +623,109 @@ function setupDestroyButton() {
       logsSection.style.display = 'block';
     }
 
-    addLog('Commande de destruction envoyee.', 'info');
+    addLog('Destruction demandee.', 'info');
 
     try {
-      const res = await fetch('http://localhost:3001/api/destroy', {
-        method: 'POST'
+      const response = await fetch('/api/destroy', {
+        method: 'POST',
+        headers: authHeaders()
       });
 
-      if (!res.ok) {
-        addLog('Erreur backend destroy', 'error');
-        alert('Erreur cote backend (destroy). Regarde les logs.');
+      if (!response.ok) {
+        let errorText = 'Erreur cote backend. Regarde le journal.';
+        try {
+          const data = await response.json();
+          if (data && data.error) errorText = data.error;
+        } catch (_) {
+          // ignore parse errors
+        }
+        errorText = humanizeErrorMessage(errorText);
+        addLog(`Erreur backend destroy: ${errorText}`, 'error');
+        window.alert(errorText);
       } else {
-        addLog('Destruction demandee. Suis la progression dans les logs.', 'success');
+        addLog('Destruction lancee. Suis la progression dans le journal.', 'success');
+        setTimeout(() => {
+          refreshSessionSummary();
+        }, 1000);
       }
-    } catch (e) {
-      addLog(`Erreur de connexion backend : ${e.message}`, 'error');
-      alert('Erreur de connexion au backend.');
+    } catch (error) {
+      addLog(`Erreur de connexion backend : ${error.message}`, 'error');
+      window.alert('Erreur de connexion au backend.');
     } finally {
       isDestroying = false;
       destroyBtn.disabled = false;
       destroyBtn.classList.remove('running');
-      destroyBtn.textContent = 'Detruire';
+      destroyBtn.textContent = 'Detruire la session et le reseau';
+    }
+  });
+}
+
+function setupOpenSessionButton() {
+  const openSessionBtn = document.getElementById('openSessionBtn');
+  if (!openSessionBtn) return;
+
+  openSessionBtn.addEventListener('click', async () => {
+    if (openSessionBtn.disabled) return;
+
+    openSessionBtn.disabled = true;
+    const initialText = openSessionBtn.textContent;
+    openSessionBtn.textContent = 'Ouverture...';
+
+    try {
+      const response = await fetch('/api/session/open', {
+        method: 'POST',
+        headers: authHeaders()
+      });
+
+      if (!response.ok) {
+        let errorText = 'Ouverture automatique impossible.';
+        try {
+          const data = await response.json();
+          if (data && data.error) errorText = data.error;
+        } catch (_) {
+          // ignore parse errors
+        }
+        errorText = humanizeErrorMessage(errorText);
+        addLog(`Erreur ouverture session: ${errorText}`, 'error');
+        window.alert(errorText);
+        return;
+      }
+
+      const data = await response.json();
+      if (!data.openUrl) {
+        throw new Error('Lien d ouverture indisponible');
+      }
+
+      window.open(data.openUrl, '_blank', 'noopener');
+      addLog('Passerelle OpenWebUI ouverte dans un nouvel onglet.', 'success');
+    } catch (error) {
+      addLog(`Erreur ouverture session: ${error.message}`, 'error');
+      window.alert('Impossible d ouvrir la session automatiquement.');
+    } finally {
+      openSessionBtn.textContent = initialText;
+      refreshSessionSummary();
     }
   });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const saved = localStorage.getItem('lastSubmittedSession');
+    if (saved) {
+      lastSubmittedSession = JSON.parse(saved);
+    }
+  } catch (_) {
+    lastSubmittedSession = null;
+  }
   connectLogStream();
+  setupPersistentFields();
+  setupAuthMode();
   setupModelSelection();
   setupInstanceSelection();
   setupDeployButton();
+  setupOpenSessionButton();
   setupDestroyButton();
+  refreshSessionSummary();
+  detectPublicCidr();
+  sessionRefreshInterval = setInterval(refreshSessionSummary, 15000);
 });

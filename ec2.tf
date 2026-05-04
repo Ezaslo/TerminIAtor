@@ -3,18 +3,11 @@ data "aws_ssm_parameter" "dlami_gpu_ubuntu_2204" {
   name = "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id"
 }
 
-# --- Security Group minimal (Ollama + OpenWebUI) ---
+# --- Security Group minimal (OpenWebUI seulement en acces externe) ---
 resource "aws_security_group" "ec2_min" {
   name        = "${var.project}-sg-ec2"
   description = "SG minimal pour EC2"
   vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 11434
-    to_port     = 11434
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_cidr]
-  }
 
   ingress {
     from_port   = 3000
@@ -86,8 +79,15 @@ locals {
     llama2-uncensored-7b = { pull = "llama2-uncensored:7b" }
   }
 
-  selected_ai     = local.ai_catalog[var.ai_choice]
-  is_gpu_instance = can(regex("^(g|p)[0-9].*", var.instance_type))
+  selected_ai         = local.ai_catalog[var.ai_choice]
+  is_gpu_instance     = can(regex("^(g|p)[0-9].*", var.instance_type))
+  effective_webui_url = trimspace(var.workspace_url) != "" ? trimspace(var.workspace_url) : "http://127.0.0.1:3000"
+  trusted_header_env = var.auth_mode == "trusted_header" ? join("\n", [
+    "      -e WEBUI_AUTH_TRUSTED_EMAIL_HEADER=${var.trusted_email_header} \\",
+    "      -e WEBUI_AUTH_TRUSTED_NAME_HEADER=${var.trusted_name_header} \\",
+    "      -e WEBUI_AUTH_TRUSTED_GROUPS_HEADER=${var.trusted_groups_header} \\",
+    "      -e WEBUI_AUTH_TRUSTED_ROLE_HEADER=${var.trusted_role_header} \\"
+  ]) : "      \\"
 
   # Dimensionnement disque par modele (GiB) pour eviter les saturations.
   model_disk_gb = {
@@ -179,7 +179,7 @@ locals {
         -p 0.0.0.0:11434:11434 \
         -v ollama-data:/root/.ollama \
         --restart unless-stopped \
-        ollama/ollama:latest
+        ${var.ollama_image}
     else
       docker run -d --name ollama \
         --network ai-stack \
@@ -188,7 +188,7 @@ locals {
         -p 0.0.0.0:11434:11434 \
         -v ollama-data:/root/.ollama \
         --restart unless-stopped \
-        ollama/ollama:latest
+        ${var.ollama_image}
     fi
 
     # Attendre que l'API Ollama soit up
@@ -202,11 +202,25 @@ locals {
       --network ai-stack \
       -p 0.0.0.0:3000:8080 \
       -e ENABLE_OLLAMA_API=true \
+      -e ENABLE_SIGNUP=false \
+      -e ENABLE_SIGNUP_PASSWORD_CONFIRMATION=true \
+      -e ENABLE_PASSWORD_VALIDATION=true \
+      -e PASSWORD_VALIDATION_REGEX_PATTERN='^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9]).{8,}$' \
+      -e PASSWORD_VALIDATION_HINT='Minimum 8 caracteres avec majuscule, minuscule et chiffre.' \
+      -e WEBUI_SECRET_KEY='${var.webui_secret_key}' \
+      -e WEBUI_ADMIN_EMAIL='${var.owui_email}' \
+      -e WEBUI_ADMIN_PASSWORD='${var.owui_password}' \
+      -e WEBUI_ADMIN_NAME='${var.owui_name}' \
+      -e WEBUI_URL='${local.effective_webui_url}' \
+      -e CORS_ALLOW_ORIGIN='*' \
+      -e ENABLE_WEBSOCKET_SUPPORT=true \
+      -e ENABLE_PERSISTENT_CONFIG=false \
       -e OLLAMA_BASE_URL=http://ollama:11434 \
       -e OLLAMA_BASE_URLS=http://ollama:11434 \
+      ${local.trusted_header_env}
       -v open-webui-data:/app/backend/data \
       --restart unless-stopped \
-      ghcr.io/open-webui/open-webui:main
+      ${var.open_webui_image}
 
     # Attendre que OpenWebUI reponde (evite les faux negatifs de readiness).
     for i in {1..120}; do
@@ -286,12 +300,14 @@ locals {
 
 # --- Instance EC2 ---
 resource "aws_instance" "ai_host" {
-  ami                         = data.aws_ssm_parameter.dlami_gpu_ubuntu_2204.value
-  instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.public_a.id
-  vpc_security_group_ids      = [aws_security_group.ec2_min.id]
-  iam_instance_profile        = aws_iam_instance_profile.ssm_profile.name
-  associate_public_ip_address = true
+  ami                                  = data.aws_ssm_parameter.dlami_gpu_ubuntu_2204.value
+  instance_type                        = var.instance_type
+  subnet_id                            = aws_subnet.public_a.id
+  vpc_security_group_ids               = [aws_security_group.ec2_min.id]
+  iam_instance_profile                 = aws_iam_instance_profile.ssm_profile.name
+  associate_public_ip_address          = true
+  disable_api_termination              = false
+  instance_initiated_shutdown_behavior = "terminate"
 
   # Augmentation du disque root
   root_block_device {
@@ -303,10 +319,20 @@ resource "aws_instance" "ai_host" {
   user_data                   = local.user_data
   user_data_replace_on_change = true
 
+  timeouts {
+    create = "45m"
+    delete = "45m"
+  }
+
   tags = merge(var.tags, {
-    Name    = "${var.project}-ai-host"
-    Role    = "ai"
-    Purpose = "lab"
+    Name          = "${var.project}-${var.workspace_slug}"
+    Role          = "ai"
+    Purpose       = "temporary-team-workspace"
+    WorkspaceName = var.workspace_name
+    WorkspaceSlug = var.workspace_slug
+    SessionTtlH   = tostring(var.session_ttl_hours)
+    TeamSizeHint  = tostring(var.team_size_hint)
+    AuthMode      = var.auth_mode
   })
 }
 

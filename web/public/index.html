@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8" />
-    <title>TerminIAtor - Déploiement IA</title>
+    <title>TerminIAtor - Session IA d'equipe</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="style.css" />
 </head>
@@ -10,133 +10,188 @@
     <div class="app">
         <header class="header">
             <h1>TerminIAtor</h1>
-            <p>Choisis ton modèle IA, ton instance, et déploie ton labo.</p>
+            <p>Cree une session IA temporaire d'equipe dans l'AWS de ton entreprise.</p>
         </header>
 
-        <!-- Sélection du modèle -->
-        <section class="model-selection">
-            <h2>Choisissez votre modèle IA</h2>
+        <section class="workspace-section">
+            <h2>Session d'equipe</h2>
             <p class="helper-text">
-                Les modèles sont classés par famille. Les modèles "gros" sont plus lents à lancer et demandent du GPU.
+                Donne un nom a la session, choisis sa duree, puis prepare l'acces pour tes utilisateurs.
+            </p>
+            <div class="credentials-form">
+                <div class="credential-field">
+                    <label for="workspaceName">Nom de session</label>
+                    <input type="text" id="workspaceName" placeholder="Atelier Produit" value="Session IA" />
+                </div>
+                <div class="credential-field">
+                    <label for="sessionTtlHours">Duree (heures)</label>
+                    <input type="number" id="sessionTtlHours" min="1" max="168" value="8" />
+                </div>
+                <div class="credential-field">
+                    <label for="teamSizeHint">Utilisateurs simultanes</label>
+                    <input type="number" id="teamSizeHint" min="1" max="200" value="5" />
+                </div>
+            </div>
+        </section>
+
+        <section class="access-section">
+            <h2>Mode d'acces</h2>
+            <p class="helper-text">
+                Le mode standard connecte les utilisateurs sans mot de passe local. L'adresse reseau est detectee automatiquement.
+            </p>
+            <div class="credentials-form">
+                <div class="credential-field">
+                    <label for="authMode">Connexion</label>
+                    <select id="authMode">
+                        <option value="local_admin">Compte admin local de secours</option>
+                        <option value="trusted_header">Connexion entreprise sans mot de passe</option>
+                    </select>
+                </div>
+            </div>
+
+            <details class="advanced-panel">
+                <summary>Parametres avances</summary>
+                <div id="trustedHeaderFields" class="credentials-form inline-block" style="display: none;">
+                    <div class="credential-field">
+                        <label for="allowedCidr">CIDR autorise</label>
+                        <input type="text" id="allowedCidr" placeholder="203.0.113.10/32" />
+                    </div>
+                    <div class="credential-field">
+                        <label for="workspaceUrl">URL publique de la session</label>
+                        <input type="text" id="workspaceUrl" placeholder="https://ia.mon-entreprise.fr/session-produit" />
+                    </div>
+                    <div class="credential-field">
+                        <label for="trustedEmailHeader">Header email</label>
+                        <input type="text" id="trustedEmailHeader" value="X-User-Email" />
+                    </div>
+                    <div class="credential-field">
+                        <label for="trustedNameHeader">Header nom</label>
+                        <input type="text" id="trustedNameHeader" value="X-User-Name" />
+                    </div>
+                    <div class="credential-field">
+                        <label for="trustedGroupsHeader">Header groupes</label>
+                        <input type="text" id="trustedGroupsHeader" value="X-User-Groups" />
+                    </div>
+                    <div class="credential-field">
+                        <label for="trustedRoleHeader">Header role</label>
+                        <input type="text" id="trustedRoleHeader" value="X-User-Role" />
+                    </div>
+                </div>
+                <p class="helper-text" style="margin-top: 0.75rem;">
+                    Le CIDR est rempli automatiquement avec ton IP publique. Tu peux le modifier si ton reseau change.
+                </p>
+            </details>
+        </section>
+
+        <section class="model-selection">
+            <h2>Modele IA</h2>
+            <p class="helper-text">
+                Les modeles sont classes par famille. Les gros modeles demandent plus de temps et de ressources.
             </p>
             <div id="modelCatalog"></div>
 
             <div id="selectedModel" class="selected-info" style="display: none;">
-                <strong>Modèle sélectionné :</strong> <span id="selectedModelName"></span>
+                <strong>Modele selectionne :</strong> <span id="selectedModelName"></span>
             </div>
         </section>
 
-        <!-- Sélection du type d'instance -->
         <section class="instance-selection">
-            <h2>Choisissez le type d'instance EC2</h2>
+            <h2>Puissance AWS</h2>
             <p class="helper-text">
-                Tu as accès aux familles <strong>T</strong> et <strong>g4dn</strong>.  
-                Pour avoir le GPU NVIDIA actif, commence par <code>g4dn.xlarge</code>.
-                Le premier démarrage peut prendre 10 à 30 minutes selon l'instance et le modèle.
+                Choisis la machine en fonction du nombre d'utilisateurs et de la taille du modele.
             </p>
 
-            <h3 class="instance-family-title">Famille T – généraliste (sans GPU)</h3>
+            <h3 class="instance-family-title">Famille T - test et petits usages</h3>
             <div class="instance-grid">
                 <div class="instance-card" data-instance="t3.small">
                     <h4>t3.small</h4>
-                    <p class="instance-desc">2 vCPU • 2 GiB RAM</p>
-                    <span class="instance-tag">T • petit test</span>
+                    <p class="instance-desc">2 vCPU - 2 GiB RAM</p>
+                    <span class="instance-tag">Test rapide</span>
                 </div>
-
                 <div class="instance-card" data-instance="t3.medium">
                     <h4>t3.medium</h4>
-                    <p class="instance-desc">2 vCPU • 4 GiB RAM</p>
-                    <span class="instance-tag">T • CPU uniquement</span>
+                    <p class="instance-desc">2 vCPU - 4 GiB RAM</p>
+                    <span class="instance-tag">Petit groupe</span>
                 </div>
-
                 <div class="instance-card" data-instance="t3.large">
                     <h4>t3.large</h4>
-                    <p class="instance-desc">2 vCPU • 8 GiB RAM</p>
-                    <span class="instance-tag">T • plus de RAM</span>
+                    <p class="instance-desc">2 vCPU - 8 GiB RAM</p>
+                    <span class="instance-tag">Equipe legere</span>
                 </div>
-
                 <div class="instance-card" data-instance="t3.xlarge">
                     <h4>t3.xlarge</h4>
-                    <p class="instance-desc">4 vCPU • 16 GiB RAM</p>
-                    <span class="instance-tag">T • charge sérieuse</span>
+                    <p class="instance-desc">4 vCPU - 16 GiB RAM</p>
+                    <span class="instance-tag">Charge serieuse</span>
                 </div>
-
                 <div class="instance-card" data-instance="t3.2xlarge">
                     <h4>t3.2xlarge</h4>
-                    <p class="instance-desc">8 vCPU • 32 GiB RAM</p>
-                    <span class="instance-tag">T • lourd / prod</span>
+                    <p class="instance-desc">8 vCPU - 32 GiB RAM</p>
+                    <span class="instance-tag">Equipe dense</span>
                 </div>
-
             </div>
 
-            <h3 class="instance-family-title">Famille g4dn – GPU</h3>
+            <h3 class="instance-family-title">Famille g4dn - acceleration GPU</h3>
             <div class="instance-grid">
                 <div class="instance-card" data-instance="g4dn.xlarge">
                     <h4>g4dn.xlarge</h4>
-                    <p class="instance-desc">1 GPU • 4 vCPU • 16 GiB</p>
-                    <span class="instance-tag">GPU • recommandé</span>
+                    <p class="instance-desc">1 GPU - 4 vCPU - 16 GiB</p>
+                    <span class="instance-tag">Recommande</span>
                 </div>
-
                 <div class="instance-card" data-instance="g4dn.2xlarge">
                     <h4>g4dn.2xlarge</h4>
-                    <p class="instance-desc">1 GPU • 8 vCPU • 32 GiB</p>
-                    <span class="instance-tag">GPU • plus de CPU/RAM</span>
+                    <p class="instance-desc">1 GPU - 8 vCPU - 32 GiB</p>
+                    <span class="instance-tag">Plus d'utilisateurs</span>
                 </div>
-
                 <div class="instance-card" data-instance="g4dn.4xlarge">
                     <h4>g4dn.4xlarge</h4>
-                    <p class="instance-desc">1 GPU • 16 vCPU • 64 GiB</p>
-                    <span class="instance-tag">GPU • gros workload</span>
+                    <p class="instance-desc">1 GPU - 16 vCPU - 64 GiB</p>
+                    <span class="instance-tag">Gros modele</span>
                 </div>
-
                 <div class="instance-card" data-instance="g4dn.8xlarge">
                     <h4>g4dn.8xlarge</h4>
-                    <p class="instance-desc">1 GPU • 32 vCPU • 128 GiB</p>
-                    <span class="instance-tag">GPU • très costaud</span>
+                    <p class="instance-desc">1 GPU - 32 vCPU - 128 GiB</p>
+                    <span class="instance-tag">Atelier intense</span>
                 </div>
             </div>
 
             <div id="selectedInstance" class="selected-info" style="display: none;">
-                <strong>Instance sélectionnée :</strong> <span id="selectedInstanceName"></span>
+                <strong>Instance selectionnee :</strong> <span id="selectedInstanceName"></span>
             </div>
         </section>
 
-        <!-- Identifiants OpenWebUI -->
         <section class="credentials-section">
-            <h2>Identifiants OpenWebUI</h2>
+            <h2>Compte bootstrap</h2>
             <p class="helper-text">
-                Ces identifiants seront utilisés pour créer automatiquement ton compte administrateur sur OpenWebUI.
+                Ce compte sert a initialiser OpenWebUI. En mode entreprise, les utilisateurs finaux n'ont rien a retenir.
             </p>
             <div class="credentials-form">
                 <div class="credential-field">
-                    <label for="owuiName">Nom</label>
+                    <label for="owuiName">Nom admin</label>
                     <input type="text" id="owuiName" placeholder="Admin" value="Admin" />
                 </div>
                 <div class="credential-field">
-                    <label for="owuiEmail">Email</label>
-                    <input type="email" id="owuiEmail" placeholder="admin@example.com" />
+                    <label for="owuiEmail">Email admin</label>
+                    <input type="email" id="owuiEmail" placeholder="admin@entreprise.fr" />
                 </div>
-                <div class="credential-field">
-                    <label for="owuiPassword">Mot de passe</label>
-                    <input type="password" id="owuiPassword" placeholder="••••••••" />
+                <div class="credential-field" id="passwordField">
+                    <label for="owuiPassword">Mot de passe admin</label>
+                    <input type="password" id="owuiPassword" placeholder="Minimum 8 caracteres" />
                 </div>
             </div>
         </section>
 
-        <!-- Boutons d'action -->
         <section class="actions">
-            <button id="deployBtn" class="primary-btn">🚀 Déployer</button>
-            <button id="destroyBtn" class="secondary-btn">💣 Détruire</button>
+            <button id="deployBtn" class="primary-btn">Creer la session</button>
+            <button id="openSessionBtn" class="primary-btn ghost-btn" disabled>Ouvrir la session</button>
+            <button id="destroyBtn" class="secondary-btn">Detruire la session et le reseau</button>
         </section>
 
-        <!-- Statut IA -->
-        <section id="iaStatus" class="ia-status">
-            IA non déployée.
+        <section id="sessionSummary" class="status-panel">
+            Aucune session active.
         </section>
 
-        <!-- Console de logs -->
         <section id="logsSection" class="logs-section" style="display: none;">
-            <h2>Console de déploiement</h2>
+            <h2>Journal de deploiement</h2>
             <div id="logs" class="logs-console"></div>
         </section>
     </div>
