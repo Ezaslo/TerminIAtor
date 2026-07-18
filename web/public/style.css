@@ -45,13 +45,24 @@ body {
 }
 
 /* Model selection */
+.workspace-section,
+.access-section,
 .model-selection,
-.instance-selection {
-    margin-bottom: 3rem;
+.instance-selection,
+.credentials-section {
+    margin-bottom: 2.5rem;
+    padding: 1.25rem 1.25rem 1.35rem;
+    border: 1px solid rgba(100, 200, 255, 0.12);
+    border-radius: 1rem;
+    background: rgba(16, 22, 46, 0.52);
+    backdrop-filter: blur(10px);
 }
 
+.workspace-section h2,
+.access-section h2,
 .model-selection h2,
-.instance-selection h2 {
+.instance-selection h2,
+.credentials-section h2 {
     font-size: 1.5rem;
     margin-bottom: 1.25rem;
     color: #e2e8f0;
@@ -59,8 +70,11 @@ body {
     text-align: center;
 }
 
+.workspace-section .helper-text,
+.access-section .helper-text,
 .model-selection .helper-text,
-.instance-selection .helper-text {
+.instance-selection .helper-text,
+.credentials-section .helper-text {
     color: #94a3b8;
     font-size: 0.9rem;
     margin-bottom: 1.25rem;
@@ -156,6 +170,33 @@ body {
     color: #cbd5f5;
 }
 
+.status-panel {
+    margin-top: 1rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.9rem;
+    border: 1px solid rgba(100, 200, 255, 0.2);
+    background: rgba(26, 26, 46, 0.6);
+    backdrop-filter: blur(10px);
+    color: #e5e7eb;
+    font-size: 0.94rem;
+    line-height: 1.45;
+}
+
+.status-panel.ready {
+    border-color: #00ff87;
+    background: rgba(0, 255, 135, 0.05);
+}
+
+.status-panel a {
+    color: #7dd3fc;
+    text-decoration: none;
+    word-break: break-word;
+}
+
+.status-panel a:hover {
+    text-decoration: underline;
+}
+
 /* Instance selection */
 
 .instance-selection {
@@ -183,6 +224,54 @@ body {
     flex-wrap: wrap;
 }
 
+/* Credentials section */
+
+.credentials-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.credential-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.credential-field label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    letter-spacing: 0.02em;
+}
+
+.credential-field input,
+.credential-field select {
+    padding: 0.65rem 0.9rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(100, 200, 255, 0.25);
+    background: rgba(26, 26, 46, 0.7);
+    color: #e5e7eb;
+    font-size: 0.95rem;
+    backdrop-filter: blur(10px);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    outline: none;
+}
+
+.credential-field input::placeholder {
+    color: #64748b;
+}
+
+.credential-field input:focus,
+.credential-field select:focus {
+    border-color: #00f2fe;
+    box-shadow: 0 0 20px rgba(0, 242, 254, 0.2);
+}
+
+.inline-block {
+    margin-top: 1rem;
+}
+
 .primary-btn,
 .secondary-btn {
     padding: 0.7rem 1.3rem;
@@ -194,6 +283,13 @@ body {
     align-items: center;
     gap: 0.4rem;
     transition: all 0.3s ease;
+}
+
+.ghost-btn {
+    background: rgba(26, 26, 46, 0.25);
+    color: #7dd3fc;
+    border: 1px solid rgba(0, 242, 254, 0.35);
+    box-shadow: none;
 }
 
 .primary-btn {
@@ -230,9 +326,11 @@ body {
 /* Logs console */
 
 .logs-section {
-    
-    margin-top: 1.5rem;
-    
+    margin-top: 1rem;
+}
+
+.ghost-btn:hover:not(:disabled) {
+    box-shadow: 0 10px 30px rgba(0, 242, 254, 0.2);
 }
 
 .logs-section h2 {
@@ -271,56 +369,6 @@ body {
 
 .log-success {
     color: #00ff87;
-}
-
-/* IA status */
-
-.ia-status {
-    margin-top: 1rem;
-    padding: 0.75rem 1rem;
-    border-radius: 0.75rem;
-    background: rgba(26, 26, 46, 0.6);
-    backdrop-filter: blur(10px);
-    color: #e5e7eb;
-    font-size: 0.9rem;
-    border: 1px solid rgba(100, 200, 255, 0.2);
-}
-
-.ia-status.loading {
-    border-color: #f59e0b;
-    box-shadow: 0 0 20px rgba(245, 158, 11, 0.2);
-}
-
-.ia-status.ready {
-    border-color: #00ff87;
-    background: rgba(0, 255, 135, 0.05);
-    box-shadow: 0 0 20px rgba(0, 255, 135, 0.2);
-}
-
-.ia-status a {
-    color: #00f2fe;
-    text-decoration: none;
-}
-
-.ia-status a:hover {
-    text-decoration: underline;
-}
-
-.ia-status .spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid #f59e0b;
-    border-top-color: transparent;
-    animation: spin 0.8s linear infinite;
-    margin-right: 0.5rem;
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
 }
 
 /* Small screens */
