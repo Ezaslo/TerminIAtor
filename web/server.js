@@ -13,6 +13,9 @@ const config = require('./src/config/env');
 const terraformService = require(
   './src/services/terraform.service'
 );
+const awsService = require(
+  './src/services/aws.service'
+);
 const app = express();
 const proxyApp = express();
 
@@ -543,6 +546,7 @@ app.get('/api/public-cidr', async (req, res) => {
     }
   );
 }
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -585,50 +589,18 @@ function terraformOutputRaw(name) {
     }
   );
 }
-
-function runAwsCli(args) {
-  try {
-    const awsEnv = { ...process.env };
-    if (process.env.AWS_PROFILE) {
-      awsEnv.AWS_PROFILE = process.env.AWS_PROFILE;
-    }
-    if (process.env.AWS_REGION) {
-      awsEnv.AWS_REGION = process.env.AWS_REGION;
-      awsEnv.AWS_DEFAULT_REGION = process.env.AWS_REGION;
-    }
-
-    return spawnSync('aws', args, {
+function readEc2Tag(
+  instanceId,
+  key
+) {
+  return awsService.readEc2Tag(
+    instanceId,
+    key,
+    {
       cwd: TERRAFORM_DIR,
-      encoding: 'utf8',
-      shell: false,
-      env: awsEnv
-    });
-  } catch (error) {
-    return { status: 1, stdout: '', stderr: error.message };
-  }
+    }
+  );
 }
-
-function readEc2Tag(instanceId, key) {
-  const result = runAwsCli([
-    'ec2',
-    'describe-tags',
-    '--filters',
-    `Name=resource-id,Values=${instanceId}`,
-    `Name=key,Values=${key}`,
-    '--query',
-    'Tags[0].Value',
-    '--output',
-    'text'
-  ]);
-
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const value = (result.stdout || '').trim();
-  return value && value !== 'None' ? value : null;
-}
-
 function requestJson(url, options = {}) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
