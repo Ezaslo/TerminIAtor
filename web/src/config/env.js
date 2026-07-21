@@ -132,6 +132,20 @@ const config = {
   cors: {
     allowedOrigins,
   },
+  auth: {
+  cookieName: (
+    process.env.AUTH_COOKIE_NAME ||
+    'terminiator_session'
+  ).trim(),
+
+  sessionDurationHours: parseInteger(
+    process.env.AUTH_SESSION_HOURS,
+    8
+  ),
+
+  secureCookies:
+    process.env.NODE_ENV === 'production',
+},
   database: {
   url: (
     process.env.DATABASE_URL || ''
