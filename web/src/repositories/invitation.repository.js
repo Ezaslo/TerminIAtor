@@ -260,10 +260,58 @@ async function revokeInvitationById({
 
   return result.rows[0] || null;
 }
+/**
+ * Marque une invitation comme acceptée.
+ *
+ * L'opération échoue si l'invitation est
+ * expirée, révoquée ou déjà utilisée.
+ */
+async function acceptInvitationById({
+  invitationId,
+  acceptedByUserId,
+}) {
+  if (
+    !invitationId ||
+    !acceptedByUserId
+  ) {
+    return null;
+  }
+
+  const result = await database.query(
+    `
+      UPDATE user_invitations
+
+      SET
+        accepted_at = NOW(),
+        accepted_by_user_id = $2
+
+      WHERE id = $1
+        AND accepted_at IS NULL
+        AND revoked_at IS NULL
+        AND expires_at > NOW()
+
+      RETURNING
+        id,
+        tenant_id,
+        email,
+        role,
+        accepted_at,
+        accepted_by_user_id
+    `,
+    [
+      invitationId,
+      acceptedByUserId,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 module.exports = {
   createInvitation,
   findActiveInvitationByTokenHash,
   findPendingInvitationByEmail,
   listPendingInvitationsByTenantId,
   revokeInvitationById,
+  acceptInvitationById,
 };
