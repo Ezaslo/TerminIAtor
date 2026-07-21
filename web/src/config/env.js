@@ -132,6 +132,16 @@ const config = {
   cors: {
     allowedOrigins,
   },
+  database: {
+  url: (
+    process.env.DATABASE_URL || ''
+  ).trim(),
+
+  ssl:
+    (
+      process.env.DATABASE_SSL || 'false'
+    ).toLowerCase() === 'true',
+},
 };
 
 module.exports = config;
