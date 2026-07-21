@@ -8,24 +8,31 @@ const https = require('https');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
-require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
+const config = require('./src/config/env');
 
 const app = express();
 const proxyApp = express();
-const PORT = Number.parseInt(process.env.PORT || '3001', 10);
-const PROXY_PORT = Number.parseInt(process.env.SESSION_PROXY_PORT || String(PORT + 1), 10);
 
-const TERRAFORM_DIR = path.join(__dirname, '..');
-const STATE_FILE = path.join(TERRAFORM_DIR, '.terminiator-state.json');
-const ADMIN_TOKEN = (process.env.TERMINIATOR_ADMIN_TOKEN || '').trim();
-const ADMIN_TOKEN_ENABLED = ADMIN_TOKEN !== '';
-const ALLOWED_ORIGINS = new Set(
-  (process.env.TERMINIATOR_ALLOWED_ORIGINS || `http://localhost:${PORT},http://127.0.0.1:${PORT}`)
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-);
+const PORT = config.port;
+const PROXY_PORT = config.proxyPort;
 
+const TERRAFORM_DIR =
+  config.terraform.directory;
+
+const STATE_FILE =
+  config.stateFile;
+
+const ADMIN_TOKEN =
+  config.admin.token;
+
+const ADMIN_TOKEN_ENABLED =
+  config.admin.tokenEnabled;
+
+const ALLOWED_ORIGINS =
+  config.cors.allowedOrigins;
+
+const TERRAFORM_BIN =
+  config.terraform.binary;
 app.use(cors({
   origin(origin, callback) {
     if (!origin || ALLOWED_ORIGINS.has(origin)) {
@@ -141,37 +148,6 @@ const INFRA_DESTROY_TARGETS = [
   'aws_subnet.public_a',
   'aws_vpc.main'
 ];
-
-function resolveTerraformBinary() {
-  const configured = (process.env.TERRAFORM_BIN || '').trim();
-  if (configured) {
-    return configured;
-  }
-
-  const candidates = [
-    'terraform',
-    'terraform.exe',
-    path.join('C:\\', 'Users', 'Enzo', 'Downloads', 'terraform_1.15.1_windows_amd64', 'terraform.exe')
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      const result = spawnSync(candidate, ['version'], {
-        shell: false,
-        stdio: 'ignore'
-      });
-      if (result.status === 0) {
-        return candidate;
-      }
-    } catch (_) {
-      // try next candidate
-    }
-  }
-
-  return null;
-}
-
-const TERRAFORM_BIN = resolveTerraformBinary();
 
 function requireAdminToken(req, res, next) {
   if (!ADMIN_TOKEN_ENABLED) {
