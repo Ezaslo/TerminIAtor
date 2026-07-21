@@ -14,7 +14,12 @@ router.post(
   '/login',
   authController.login
 );
-
+router.post(
+  '/logout',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authController.logout
+);
 router.get(
   '/me',
   authMiddleware.authenticate,
