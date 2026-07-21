@@ -1309,7 +1309,19 @@ app.post(
   }
 });
 
-app.post('/api/destroy', requireAdminToken, async (req, res) => {
+app.post(
+  '/api/destroy',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  requireAdminToken,
+
+  async (req, res) => {
   if (currentOperation.status === 'running') {
     const canInterruptReadiness =
       currentOperation.type === 'deploy' && currentOperation.phase === 'readiness';
