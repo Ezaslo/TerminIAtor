@@ -112,9 +112,44 @@ async function findUserById(id) {
 
   return result.rows[0] || null;
 }
+/**
+ * Liste les utilisateurs d’une organisation.
+ *
+ * Le tenantId est toujours fourni par le backend
+ * à partir de l’utilisateur connecté.
+ */
+async function listUsersByTenantId(
+  tenantId
+) {
+  if (!tenantId) {
+    throw new Error(
+      'Le tenant est obligatoire.'
+    );
+  }
 
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        tenant_id,
+        email,
+        role,
+        created_at
+
+      FROM users
+
+      WHERE tenant_id = $1
+
+      ORDER BY created_at ASC
+    `,
+    [tenantId]
+  );
+
+  return result.rows;
+}
 module.exports = {
   createUser,
   findUserByEmail,
   findUserById,
+  listUsersByTenantId,
 };
