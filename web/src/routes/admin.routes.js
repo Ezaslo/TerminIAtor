@@ -22,5 +22,16 @@ router.get(
 
   adminController.listUsers
 );
+router.post(
+  '/invitations',
 
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  adminController.createInvitation
+);
 module.exports = router;
