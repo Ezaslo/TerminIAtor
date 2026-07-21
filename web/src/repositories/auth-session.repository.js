@@ -163,6 +163,34 @@ async function revokeAuthSessionByTokenHash(
  * Supprime les anciennes connexions expirées
  * ou révoquées.
  */
+/**
+ * Révoque une session grâce à son identifiant.
+ *
+ * Cette fonction sera utilisée lors de la déconnexion.
+ */
+async function revokeAuthSessionById(id) {
+  if (!id) {
+    return null;
+  }
+
+  const result = await database.query(
+    `
+      UPDATE auth_sessions
+
+      SET revoked_at = NOW()
+
+      WHERE id = $1
+        AND revoked_at IS NULL
+
+      RETURNING
+        id,
+        revoked_at
+    `,
+    [id]
+  );
+
+  return result.rows[0] || null;
+}
 async function deleteInactiveAuthSessions() {
   const result = await database.query(`
     DELETE FROM auth_sessions
@@ -179,5 +207,6 @@ module.exports = {
   findActiveSessionByTokenHash,
   touchAuthSession,
   revokeAuthSessionByTokenHash,
+  revokeAuthSessionById,
   deleteInactiveAuthSessions,
 };
