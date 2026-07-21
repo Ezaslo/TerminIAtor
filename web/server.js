@@ -456,7 +456,14 @@ function restorePersistedSession() {
   persistState();
 }
 
-app.get('/api/stream', (req, res) => {
+app.get(
+  '/api/stream',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireAuthentication,
+
+  (req, res) => {
   if (ADMIN_TOKEN_ENABLED && (req.query.token || '') !== ADMIN_TOKEN) {
     return res.status(401).json({
       ok: false,
