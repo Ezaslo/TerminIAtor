@@ -16,6 +16,9 @@ const terraformService = require(
 const awsService = require(
   './src/services/aws.service'
 );
+const authRoutes = require(
+  './src/routes/auth.routes'
+);
 const app = express();
 const proxyApp = express();
 
@@ -52,6 +55,12 @@ app.use(cors({
   allowedHeaders: ['Content-Type']
 }));
 app.use(bodyParser.json({ limit: '32kb' }));
+
+app.use(
+  '/api/auth',
+  authRoutes
+);
+
 app.use(express.static('public'));
 
 const clients = [];
