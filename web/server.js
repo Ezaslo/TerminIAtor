@@ -6,10 +6,13 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
-const { spawn, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 const config = require('./src/config/env');
 
+const terraformService = require(
+  './src/services/terraform.service'
+);
 const app = express();
 const proxyApp = express();
 
@@ -527,68 +530,19 @@ app.get('/api/public-cidr', async (req, res) => {
     });
   }
 });
-
-function runTerraform(args, extraEnv = {}) {
-  return new Promise((resolve, reject) => {
-    pushLog(`terraform ${args.join(' ')}`, 'info');
-
-    if (!TERRAFORM_BIN) {
-      reject(
-        new Error(
-          'Terraform introuvable. Definis TERRAFORM_BIN ou ajoute terraform.exe au PATH.'
-        )
-      );
-      return;
-    }
-
-    const terraformEnv = { ...process.env };
-    if (process.env.AWS_PROFILE && !terraformEnv.TF_VAR_aws_profile) {
-      terraformEnv.TF_VAR_aws_profile = process.env.AWS_PROFILE;
-    }
-    if (process.env.AWS_REGION && !terraformEnv.TF_VAR_aws_region) {
-      terraformEnv.TF_VAR_aws_region = process.env.AWS_REGION;
-    }
-
-    const proc = spawn(TERRAFORM_BIN, args, {
+ function runTerraform(
+  argumentsList,
+  extraEnvironment = {}
+) {
+  return terraformService.runTerraform(
+    argumentsList,
+    {
       cwd: TERRAFORM_DIR,
-      shell: false,
-      env: { ...terraformEnv, ...extraEnv }
-    });
-
-    proc.on('error', (error) => {
-      reject(error);
-    });
-
-    proc.stdout.on('data', (data) => {
-      data
-        .toString()
-        .split('\n')
-        .forEach((line) => {
-          if (line.trim() !== '') pushLog(line, 'terraform');
-        });
-    });
-
-    proc.stderr.on('data', (data) => {
-      data
-        .toString()
-        .split('\n')
-        .forEach((line) => {
-          if (line.trim() !== '') pushLog(line, 'error');
-        });
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) {
-        pushLog(`terraform ${args[0]} termine (code 0)`, 'success');
-        resolve();
-      } else {
-        pushLog(`terraform ${args[0]} sorti avec le code ${code}`, 'error');
-        reject(new Error(`Terraform exited with code ${code}`));
-      }
-    });
-  });
+      extraEnvironment,
+      onLog: pushLog,
+    }
+  );
 }
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -624,19 +578,12 @@ function checkHttpStatus(url, acceptedStatuses = [200]) {
 }
 
 function terraformOutputRaw(name) {
-  if (!TERRAFORM_BIN) {
-    return { status: 1, stdout: '', stderr: 'Terraform introuvable' };
-  }
-
-  try {
-    return spawnSync(TERRAFORM_BIN, ['output', '-raw', name], {
+  return terraformService.outputRaw(
+    name,
+    {
       cwd: TERRAFORM_DIR,
-      encoding: 'utf8',
-      shell: false
-    });
-  } catch (error) {
-    return { status: 1, stdout: '', stderr: error.message };
-  }
+    }
+  );
 }
 
 function runAwsCli(args) {
