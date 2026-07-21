@@ -118,7 +118,29 @@ async function login(
     return next(error);
   }
 }
-
+/**
+ * Renvoie l’utilisateur actuellement connecté.
+ */
+function getCurrentUser(
+  request,
+  response
+) {
+  return response.status(200).json({
+    user: {
+      id: request.auth.userId,
+      email: request.auth.email,
+      role: request.auth.role,
+      tenantId: request.auth.tenantId,
+      tenantName: request.auth.tenantName,
+      tenantSlug: request.auth.tenantSlug,
+    },
+    session: {
+      id: request.auth.sessionId,
+      expiresAt: request.auth.expiresAt,
+    },
+  });
+}
 module.exports = {
   login,
+  getCurrentUser,
 };
