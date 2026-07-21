@@ -19,6 +19,9 @@ const awsService = require(
 const authRoutes = require(
   './src/routes/auth.routes'
 );
+const authMiddleware = require(
+  './src/middleware/auth.middleware'
+);
 const app = express();
 const proxyApp = express();
 
@@ -965,7 +968,19 @@ async function waitForIaReady(ip, instanceType, expectedModel = null, instanceId
   return { ready: false, cancelled: false };
 }
 
-app.post('/api/deploy', requireAdminToken, async (req, res) => {
+app.post(
+  '/api/deploy',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  requireAdminToken,
+
+  async (req, res) => {
   const {
     aiChoice,
     instanceType,
