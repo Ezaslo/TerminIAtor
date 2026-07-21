@@ -22,6 +22,9 @@ const authRoutes = require(
 const adminRoutes = require(
   './src/routes/admin.routes'
 );
+const invitationRoutes = require(
+  './src/routes/invitation.routes'
+);
 const authMiddleware = require(
   './src/middleware/auth.middleware'
 );
@@ -69,6 +72,10 @@ app.use(
 app.use(
   '/api/admin',
   adminRoutes
+);
+app.use(
+  '/api/invitations',
+  invitationRoutes
 );
 app.use(express.static('public'));
 
