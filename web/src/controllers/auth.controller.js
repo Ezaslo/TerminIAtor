@@ -140,7 +140,40 @@ function getCurrentUser(
     },
   });
 }
+/**
+ * Déconnecte l’utilisateur actuellement connecté.
+ */
+async function logout(
+  request,
+  response,
+  next
+) {
+  try {
+    await authSessionRepository
+      .revokeAuthSessionById(
+        request.auth.sessionId
+      );
+
+    response.clearCookie(
+      config.auth.cookieName,
+      {
+        httpOnly: true,
+        secure:
+          config.auth.secureCookies,
+        sameSite: 'lax',
+        path: '/',
+      }
+    );
+
+    return response.status(200).json({
+      message: 'Déconnexion réussie.',
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
 module.exports = {
   login,
+  logout,
   getCurrentUser,
 };
