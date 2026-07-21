@@ -6,7 +6,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+
 
 const config = require('./src/config/env');
 
