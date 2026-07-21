@@ -19,6 +19,9 @@ const awsService = require(
 const authRoutes = require(
   './src/routes/auth.routes'
 );
+const adminRoutes = require(
+  './src/routes/admin.routes'
+);
 const authMiddleware = require(
   './src/middleware/auth.middleware'
 );
@@ -63,7 +66,10 @@ app.use(
   '/api/auth',
   authRoutes
 );
-
+app.use(
+  '/api/admin',
+  adminRoutes
+);
 app.use(express.static('public'));
 
 const clients = [];
