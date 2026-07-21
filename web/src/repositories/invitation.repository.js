@@ -181,6 +181,53 @@ async function listPendingInvitationsByTenantId(
  * Révoque une invitation appartenant
  * au tenant connecté.
  */
+/**
+ * Recherche une invitation encore active
+ * pour une adresse email dans un tenant.
+ */
+async function findPendingInvitationByEmail({
+  tenantId,
+  email,
+}) {
+  const normalizedEmail =
+    typeof email === 'string'
+      ? email.trim().toLowerCase()
+      : '';
+
+  if (!tenantId || !normalizedEmail) {
+    return null;
+  }
+
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        tenant_id,
+        email,
+        role,
+        created_at,
+        expires_at
+
+      FROM user_invitations
+
+      WHERE tenant_id = $1
+        AND LOWER(email) = $2
+        AND accepted_at IS NULL
+        AND revoked_at IS NULL
+        AND expires_at > NOW()
+
+      ORDER BY created_at DESC
+
+      LIMIT 1
+    `,
+    [
+      tenantId,
+      normalizedEmail,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 async function revokeInvitationById({
   invitationId,
   tenantId,
@@ -213,10 +260,10 @@ async function revokeInvitationById({
 
   return result.rows[0] || null;
 }
-
 module.exports = {
   createInvitation,
   findActiveInvitationByTokenHash,
+  findPendingInvitationByEmail,
   listPendingInvitationsByTenantId,
   revokeInvitationById,
 };
