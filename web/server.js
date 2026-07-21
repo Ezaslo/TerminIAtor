@@ -525,7 +525,19 @@ app.get(
   });
 });
 
-app.post('/api/session/open', requireAdminToken, async (req, res) => {
+app.post(
+  '/api/session/open',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  requireAdminToken,
+
+  async (req, res) => {
   try {
     assertLocalAdminReady();
     await ensureOpenWebUiJwt();
