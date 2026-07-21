@@ -557,7 +557,14 @@ app.post(
   }
 });
 
-app.get('/api/public-cidr', async (req, res) => {
+app.get(
+  '/api/public-cidr',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireAuthentication,
+
+  async (req, res) => {
   try {
     const data = await fetchJson('https://api.ipify.org?format=json');
     const ip = typeof data.ip === 'string' ? data.ip.trim() : '';
