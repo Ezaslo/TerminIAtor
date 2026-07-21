@@ -6,11 +6,16 @@ const invitationService = require(
   '../services/invitation.service'
 );
 
+const invitationAcceptanceService = require(
+  '../services/invitation-acceptance.service'
+);
+
+const passwordService = require(
+  '../services/password.service'
+);
+
 /**
  * Vérifie qu'une invitation est encore valide.
- *
- * Cette route sera publique car l'utilisateur
- * invité ne possède pas encore de compte.
  */
 async function getInvitationDetails(
   request,
@@ -70,6 +75,95 @@ async function getInvitationDetails(
   }
 }
 
+/**
+ * Accepte une invitation et crée
+ * le compte de l'utilisateur.
+ */
+async function acceptInvitation(
+  request,
+  response,
+  next
+) {
+  try {
+    const token =
+      typeof request.body?.token === 'string'
+        ? request.body.token.trim()
+        : '';
+
+    const password =
+      typeof request.body?.password === 'string'
+        ? request.body.password
+        : '';
+
+    if (!token) {
+      return response.status(400).json({
+        error:
+          'Le jeton d’invitation est obligatoire.',
+      });
+    }
+
+    if (
+      password.length < 8 ||
+      password.length > 200
+    ) {
+      return response.status(400).json({
+        error:
+          'Le mot de passe doit contenir entre 8 et 200 caractères.',
+      });
+    }
+
+    const tokenHash =
+      invitationService
+        .hashInvitationToken(token);
+
+    const passwordHash =
+      await passwordService
+        .hashPassword(password);
+
+    const result =
+      await invitationAcceptanceService
+        .acceptInvitationAndCreateUser({
+          tokenHash,
+          passwordHash,
+        });
+
+    if (!result) {
+      return response.status(404).json({
+        error:
+          'Cette invitation est invalide, expirée ou déjà utilisée.',
+      });
+    }
+
+    return response.status(201).json({
+      message:
+        'Votre compte a été créé avec succès.',
+
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        role: result.user.role,
+        tenantId: result.user.tenant_id,
+        createdAt: result.user.created_at,
+      },
+
+      tenant: result.tenant,
+    });
+  } catch (error) {
+    if (
+      error.code ===
+      'EMAIL_ALREADY_EXISTS'
+    ) {
+      return response.status(409).json({
+        error:
+          'Un compte existe déjà pour cette adresse email.',
+      });
+    }
+
+    return next(error);
+  }
+}
+
 module.exports = {
   getInvitationDetails,
+  acceptInvitation,
 };
