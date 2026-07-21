@@ -480,7 +480,16 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
-app.get('/api/session', requireAdminToken, (req, res) => {
+app.get(
+  '/api/session',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireAuthentication,
+
+  requireAdminToken,
+
+  (req, res) => {
   res.json({
     ok: true,
     session: {
