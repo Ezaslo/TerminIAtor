@@ -147,9 +147,43 @@ async function listUsersByTenantId(
 
   return result.rows;
 }
+/**
+ * Supprime un utilisateur appartenant à un tenant.
+ *
+ * @param {object} options Données de suppression.
+ * @param {string} options.userId Identifiant utilisateur.
+ * @param {string} options.tenantId Identifiant du tenant.
+ * @returns {Promise<object|null>}
+ */
+async function deleteUserByIdAndTenantId({
+  userId,
+  tenantId,
+}) {
+  const result = await database.query(
+    `
+      DELETE FROM users
+
+      WHERE id = $1
+        AND tenant_id = $2
+
+      RETURNING
+        id,
+        tenant_id,
+        email,
+        role
+    `,
+    [
+      userId,
+      tenantId,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 module.exports = {
   createUser,
   findUserByEmail,
   findUserById,
+  deleteUserByIdAndTenantId,
   listUsersByTenantId,
 };
