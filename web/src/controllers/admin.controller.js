@@ -177,8 +177,45 @@ async function createInvitation(
     return next(error);
   }
 }
+/**
+ * Liste les invitations encore actives
+ * pour l’organisation connectée.
+ */
+async function listInvitations(
+  request,
+  response,
+  next
+) {
+  try {
+    const invitations =
+      await invitationRepository
+        .listPendingInvitationsByTenantId(
+          request.auth.tenantId
+        );
 
+    return response.status(200).json({
+      count: invitations.length,
+
+      invitations: invitations.map(
+        (invitation) => ({
+          id: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          invitedByEmail:
+            invitation.invited_by_email,
+          createdAt:
+            invitation.created_at,
+          expiresAt:
+            invitation.expires_at,
+        })
+      ),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
 module.exports = {
   listUsers,
+  listInvitations,
   createInvitation,
 };

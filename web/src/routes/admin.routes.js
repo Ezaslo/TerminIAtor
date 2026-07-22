@@ -34,4 +34,16 @@ router.post(
 
   adminController.createInvitation
 );
+router.get(
+  '/invitations',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  adminController.listInvitations
+);
 module.exports = router;

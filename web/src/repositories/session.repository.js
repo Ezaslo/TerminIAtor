@@ -1,6 +1,8 @@
 const fs = require('fs');
+const crypto = require('crypto');
 
 const config = require('../config/env');
+const database = require('../database/database');
 
 /**
  * Crée un état vide pour une session.
@@ -207,9 +209,124 @@ function loadPersistedState(onError = null) {
   }
 }
 
+/**
+ * Crée une nouvelle session dans PostgreSQL.
+ *
+ * @param {object} session Données de la session.
+ * @returns {Promise<object>}
+ */
+async function createSession(session) {
+  const id = crypto.randomUUID();
+
+  const result = await database.query(
+    `
+      INSERT INTO sessions (
+        id,
+        tenant_id,
+        created_by_user_id,
+        name,
+        slug,
+        status,
+        terraform_directory,
+        expires_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8
+      )
+      RETURNING *
+    `,
+    [
+      id,
+      session.tenantId,
+      session.createdByUserId,
+      session.name,
+      session.slug,
+      session.status || 'queued',
+      session.terraformDirectory || null,
+      session.expiresAt || null,
+    ]
+  );
+
+  return result.rows[0];
+}
+/**
+ * Retourne les sessions appartenant à un tenant.
+ *
+ * @param {string} tenantId Identifiant du tenant.
+ * @returns {Promise<object[]>}
+ */
+async function listSessionsByTenantId(tenantId) {
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        tenant_id,
+        created_by_user_id,
+        name,
+        slug,
+        status,
+        instance_id,
+        elastic_ip,
+        dns_name,
+        access_url,
+        terraform_directory,
+        created_at,
+        updated_at,
+        expires_at,
+        destroyed_at
+      FROM sessions
+      WHERE tenant_id = $1
+      ORDER BY created_at DESC
+    `,
+    [
+      tenantId,
+    ]
+  );
+
+  return result.rows;
+}
+/**
+ * Met à jour le statut d’une session PostgreSQL.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @param {string} status Nouveau statut.
+ * @returns {Promise<object|null>}
+ */
+async function updateSessionStatus(
+  sessionId,
+  status
+) {
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        status = $2,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      sessionId,
+      status,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
 module.exports = {
+  createSession,
+  listSessionsByTenantId,
   getSessionState,
   getDraftSessionState,
+  updateSessionStatus,
   getSessionSecrets,
   clearSessionState,
   clearSessionSecrets,

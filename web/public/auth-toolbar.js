@@ -18,16 +18,23 @@ function displayAuthenticationToolbar(
     'terminiator-auth-toolbar';
 
   toolbar.innerHTML = `
-    <div class="terminiator-auth-user">
-      <strong></strong>
-      <span></span>
-    </div>
+  <div class="terminiator-auth-user">
+    <strong></strong>
+    <span></span>
+  </div>
 
-    <button type="button">
-      Se déconnecter
-    </button>
-  `;
+  <a
+    class="terminiator-admin-link"
+    href="/admin.html"
+    hidden
+  >
+    Administration
+  </a>
 
+  <button type="button">
+    Se déconnecter
+  </button>
+`;
   const emailElement =
     toolbar.querySelector('strong');
 
@@ -36,6 +43,10 @@ function displayAuthenticationToolbar(
 
   const logoutButton =
     toolbar.querySelector('button');
+  const adminLink =
+    toolbar.querySelector(
+    '.terminiator-admin-link'
+  );
 
   emailElement.textContent =
     authentication.user.email;
@@ -44,7 +55,10 @@ function displayAuthenticationToolbar(
     `${authentication.user.role} · ${
       authentication.user.tenantName
     }`;
-
+adminLink.hidden =
+  !['owner', 'admin'].includes(
+    authentication.user.role
+  );
   Object.assign(toolbar.style, {
     position: 'fixed',
     top: '16px',
@@ -78,7 +92,16 @@ function displayAuthenticationToolbar(
     color: '#94a3b8',
     fontSize: '12px',
   });
-
+Object.assign(adminLink.style, {
+  padding: '8px 12px',
+  borderRadius: '8px',
+  background: '#0284c7',
+  color: '#ffffff',
+  textDecoration: 'none',
+  fontWeight: '700',
+  fontSize: '13px',
+});
+  
   Object.assign(logoutButton.style, {
     padding: '8px 12px',
     border: '0',

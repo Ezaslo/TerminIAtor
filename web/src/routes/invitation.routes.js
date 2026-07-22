@@ -11,4 +11,9 @@ router.post(
   invitationController.getInvitationDetails
 );
 
+router.post(
+  '/accept',
+  invitationController.acceptInvitation
+);
+
 module.exports = router;

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <script src="/auth-guard.js"></script>
+
+  <script
+    src="/auth-toolbar.js"
+    defer
+  ></script>
+  <script
+  src="/admin.js"
+  defer
+></script>
+
+  <title>Administration — TerminIAtor</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 32px;
+      font-family: Inter, Arial, sans-serif;
+      background: #020617;
+      color: #f8fafc;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 32px;
+      padding-right: 320px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 34px;
+      letter-spacing: -1px;
+    }
+
+    header h1 span {
+      color: #38bdf8;
+    }
+
+    header p {
+      margin: 10px 0 0;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-bottom: 22px;
+      color: #38bdf8;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    .statistics {
+      display: grid;
+      grid-template-columns:
+        repeat(auto-fit, minmax(200px, 1fr));
+      gap: 18px;
+      margin-bottom: 28px;
+    }
+
+    .statistic-card,
+    .panel {
+      border: 1px solid #334155;
+      border-radius: 16px;
+      background: #0f172a;
+      box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .statistic-card {
+      padding: 22px;
+    }
+
+    .statistic-label {
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    .statistic-value {
+      display: block;
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: 800;
+    }
+
+    .panel {
+      margin-bottom: 28px;
+      padding: 26px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .panel-header p {
+      margin: 6px 0 0;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    .invitation-form {
+      display: grid;
+      grid-template-columns: 1fr 180px 170px;
+      align-items: end;
+      gap: 16px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 8px;
+      color: #cbd5e1;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 44px;
+      padding: 11px 13px;
+      border: 1px solid #475569;
+      border-radius: 9px;
+      outline: none;
+      background: #020617;
+      color: #f8fafc;
+      font-size: 14px;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: #38bdf8;
+      box-shadow:
+        0 0 0 3px rgba(56, 189, 248, 0.15);
+    }
+
+    button {
+      min-height: 44px;
+      padding: 11px 18px;
+      border: 0;
+      border-radius: 9px;
+      cursor: pointer;
+      background: #0284c7;
+      color: #ffffff;
+      font-weight: 800;
+    }
+
+    button:hover {
+      background: #0369a1;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .table-container {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 14px 12px;
+      border-bottom: 1px solid #1e293b;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #94a3b8;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    td {
+      color: #e2e8f0;
+      font-size: 14px;
+    }
+
+    .role-badge {
+      display: inline-block;
+      padding: 5px 9px;
+      border: 1px solid #475569;
+      border-radius: 999px;
+      background: #1e293b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .empty-row {
+      color: #64748b;
+      text-align: center;
+    }
+
+    .message {
+      min-height: 22px;
+      margin: 16px 0 0;
+      font-size: 14px;
+    }
+
+    .message.error {
+      color: #fca5a5;
+    }
+
+    .message.success {
+      color: #86efac;
+    }
+
+    @media (max-width: 850px) {
+      body {
+        padding: 20px;
+      }
+
+      header {
+        padding-right: 0;
+        padding-top: 90px;
+      }
+
+      .invitation-form {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <a
+      class="back-link"
+      href="/"
+    >
+      ← Retour au tableau de bord
+    </a>
+
+    <header>
+      <h1>
+        Administration
+        <span>TerminIAtor</span>
+      </h1>
+
+      <p>
+        Gérez les membres et les invitations
+        de votre organisation.
+      </p>
+    </header>
+
+    <section class="statistics">
+      <article class="statistic-card">
+        <span class="statistic-label">
+          Organisation
+        </span>
+
+        <strong
+          id="tenant-name"
+          class="statistic-value"
+        >
+          —
+        </strong>
+      </article>
+
+      <article class="statistic-card">
+        <span class="statistic-label">
+          Utilisateurs
+        </span>
+
+        <strong
+          id="users-count"
+          class="statistic-value"
+        >
+          —
+        </strong>
+      </article>
+
+      <article class="statistic-card">
+        <span class="statistic-label">
+          Invitations en attente
+        </span>
+
+        <strong
+          id="invitations-count"
+          class="statistic-value"
+        >
+          —
+        </strong>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Inviter un utilisateur</h2>
+
+          <p>
+            Le lien généré pourra être copié
+            et envoyé à l’utilisateur.
+          </p>
+        </div>
+      </div>
+
+      <form
+        id="invitation-form"
+        class="invitation-form"
+      >
+        <div class="field">
+          <label for="invitation-email">
+            Adresse email
+          </label>
+
+          <input
+            id="invitation-email"
+            type="email"
+            placeholder="utilisateur@entreprise.fr"
+            autocomplete="email"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label for="invitation-role">
+            Rôle
+          </label>
+
+          <select
+            id="invitation-role"
+            required
+          >
+            <option value="member">
+              Membre
+            </option>
+
+            <option value="admin">
+              Administrateur
+            </option>
+          </select>
+        </div>
+
+        <button
+          id="invitation-submit"
+          type="submit"
+        >
+          Créer l’invitation
+        </button>
+      </form>
+
+      <p
+        id="invitation-message"
+        class="message"
+        aria-live="polite"
+      ></p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Utilisateurs</h2>
+
+          <p>
+            Membres actuellement enregistrés
+            dans votre organisation.
+          </p>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Rôle</th>
+              <th>Date de création</th>
+            </tr>
+          </thead>
+
+          <tbody id="users-table-body">
+            <tr>
+              <td
+                class="empty-row"
+                colspan="3"
+              >
+                Chargement des utilisateurs…
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Invitations en attente</h2>
+
+          <p>
+            Invitations encore valides et
+            non utilisées.
+          </p>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Rôle</th>
+              <th>Invité par</th>
+              <th>Expiration</th>
+            </tr>
+          </thead>
+
+          <tbody id="invitations-table-body">
+            <tr>
+              <td
+                class="empty-row"
+                colspan="4"
+              >
+                Chargement des invitations…
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p
+      id="page-message"
+      class="message"
+      aria-live="polite"
+    ></p>
+  </main>
+</body>
+</html>

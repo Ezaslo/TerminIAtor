@@ -9,7 +9,9 @@ const crypto = require('crypto');
 
 
 const config = require('./src/config/env');
-
+const sessionRepository = require(
+  './src/repositories/session.repository'
+);
 const terraformService = require(
   './src/services/terraform.service'
 );
@@ -24,6 +26,9 @@ const adminRoutes = require(
 );
 const invitationRoutes = require(
   './src/routes/invitation.routes'
+);
+const sessionRoutes = require(
+  './src/routes/session.routes'
 );
 const authMiddleware = require(
   './src/middleware/auth.middleware'
@@ -76,6 +81,10 @@ app.use(
 app.use(
   '/api/invitations',
   invitationRoutes
+);
+app.use(
+  '/api/sessions',
+  sessionRoutes
 );
 app.use(express.static('public'));
 
@@ -1169,7 +1178,21 @@ app.post(
       : owuiPassword;
   const finalWebuiSecretKey = crypto.randomBytes(48).toString('hex');
   const expectedModel = AI_PULL_MAP[aiChoice] || null;
-  const accessNotes = buildAccessNotes(finalAuthMode, finalWorkspaceUrl, finalOwuiEmail);
+  const accessNotes = buildAccessNotes(
+    finalAuthMode,
+    finalWorkspaceUrl,
+    finalOwuiEmail
+  );
+
+  const sessionExpiresAt = new Date(
+    Date.now() +
+      finalSessionTtlHours *
+        60 *
+        60 *
+        1000
+  ).toISOString();
+
+  let databaseSession = null;
 
   try {
     currentOperation.type = 'deploy';
@@ -1177,6 +1200,22 @@ app.post(
     currentOperation.phase = 'terraform';
     currentOperation.cancelReadiness = false;
     currentOperation.logs = [];
+
+    databaseSession =
+      await sessionRepository.createSession({
+        tenantId: req.auth.tenantId,
+        createdByUserId: req.auth.userId,
+        name: finalWorkspaceName,
+        slug: finalWorkspaceSlug,
+        status: 'provisioning',
+        terraformDirectory: TERRAFORM_DIR,
+        expiresAt: sessionExpiresAt,
+      });
+
+    pushLog(
+      `Session PostgreSQL creee : ${databaseSession.id}`,
+      'info'
+    );
 
     pushLog(
       `Nouvelle session equipe (${finalWorkspaceName}, auth_mode=${finalAuthMode}, instance=${finalInstanceType}, ttl=${finalSessionTtlHours}h)`,
@@ -1326,6 +1365,7 @@ app.post(
         sessionState.status = 'ready';
         draftSessionState.status = 'ready';
         persistState();
+        
       }
     } else {
       pushLog('Impossible de recuperer ec2_public_ip', 'error');
@@ -1334,6 +1374,12 @@ app.post(
     currentOperation.status = 'success';
     currentOperation.phase = 'idle';
     currentOperation.cancelReadiness = false;
+    if (databaseSession) {
+  await sessionRepository.updateSessionStatus(
+    databaseSession.id,
+    'failed'
+  );
+}
     currentOperation.type = 'idle';
     scheduleDestroyFromTtl(finalSessionTtlHours);
 
