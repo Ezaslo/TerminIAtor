@@ -9,6 +9,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const database = require('./src/database/database');
+const healthRoutes = require('./src/routes/health.routes');
 
 const {
   notFoundHandler,
@@ -2146,21 +2147,7 @@ proxyApp.use(async (req, res) => {
   }
 });
 
-app.get('/health', async (req, res, next) => {
-  try {
-    await database.query('SELECT 1');
-
-    res.status(200).json({
-      status: 'ok',
-      application: 'up',
-      database: 'up',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    error.statusCode = 503;
-    next(error);
-  }
-});
+app.use('/health', healthRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
