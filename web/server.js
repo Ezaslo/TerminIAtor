@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const database = require('./src/database/database');
 
 const {
   notFoundHandler,
@@ -82,6 +83,8 @@ const loginLimiter = rateLimit({
     error: 'Trop de tentatives de connexion. Réessaie dans 15 minutes.'
   }
 });
+
+
 
 app.use('/api/auth/login', loginLimiter);
 app.use(cors({
@@ -2140,6 +2143,22 @@ proxyApp.use(async (req, res) => {
       .send(
         `Proxy OpenWebUI indisponible: ${error.message}`
       );
+  }
+});
+
+app.get('/health', async (req, res, next) => {
+  try {
+    await database.query('SELECT 1');
+
+    res.status(200).json({
+      status: 'ok',
+      application: 'up',
+      database: 'up',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    error.statusCode = 503;
+    next(error);
   }
 });
 
