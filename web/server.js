@@ -9,6 +9,11 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
+const {
+  notFoundHandler,
+  errorHandler
+} = require('./src/middleware/error-handler');
+
 const groupRepository = require('./src/repositories/group.repository');
 const config = require('./src/config/env');
 const sessionRepository = require(
@@ -2137,6 +2142,9 @@ proxyApp.use(async (req, res) => {
       );
   }
 });
+
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Serveur backend demarre sur http://localhost:${PORT}`);
