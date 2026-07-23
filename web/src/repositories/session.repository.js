@@ -12,6 +12,7 @@ const database = require('../database/database');
 function createEmptySessionState() {
   return {
     active: false,
+    databaseSessionId: null,
     status: 'idle',
     workspaceName: null,
     workspaceSlug: null,
@@ -320,13 +321,109 @@ async function updateSessionStatus(
 
   return result.rows[0] || null;
 }
+/**
+ * Marque une session PostgreSQL comme détruite.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @returns {Promise<object|null>}
+ */
+async function markSessionDestroyed(sessionId) {
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        status = 'destroyed',
+        destroyed_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      sessionId,
+    ]
+  );
 
+  return result.rows[0] || null;
+}
+/**
+ * Autorise un utilisateur à accéder à une session.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @param {string} userId Identifiant de l'utilisateur.
+ * @returns {Promise<object>}
+ */
+async function addUserToSession(
+  sessionId,
+  userId
+) {
+  const result = await database.query(
+    `
+      INSERT INTO session_users (
+        session_id,
+        user_id
+      )
+      VALUES (
+        $1,
+        $2
+      )
+      ON CONFLICT (
+        session_id,
+        user_id
+      )
+      DO UPDATE SET
+        user_id = EXCLUDED.user_id
+      RETURNING *
+    `,
+    [
+      sessionId,
+      userId,
+    ]
+  );
+
+  return result.rows[0];
+}
+/**
+ * Vérifie qu'un utilisateur peut accéder à une session.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @param {string} userId Identifiant de l'utilisateur.
+ * @param {string} tenantId Identifiant du tenant.
+ * @returns {Promise<boolean>}
+ */
+async function canUserAccessSession(
+  sessionId,
+  userId,
+  tenantId
+) {
+  const result = await database.query(
+    `
+      SELECT 1
+      FROM session_users
+      INNER JOIN sessions
+        ON sessions.id = session_users.session_id
+      WHERE session_users.session_id = $1
+        AND session_users.user_id = $2
+        AND sessions.tenant_id = $3
+      LIMIT 1
+    `,
+    [
+      sessionId,
+      userId,
+      tenantId,
+    ]
+  );
+
+  return result.rowCount > 0;
+}
 module.exports = {
+  addUserToSession,
   createSession,
   listSessionsByTenantId,
   getSessionState,
+  markSessionDestroyed,
   getDraftSessionState,
   updateSessionStatus,
+  canUserAccessSession,
   getSessionSecrets,
   clearSessionState,
   clearSessionSecrets,

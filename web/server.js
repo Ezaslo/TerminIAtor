@@ -35,6 +35,7 @@ const authMiddleware = require(
 );
 const app = express();
 const proxyApp = express();
+proxyApp.use(authMiddleware.authenticate);
 
 const PORT = config.port;
 const PROXY_PORT = config.proxyPort;
@@ -65,7 +66,7 @@ app.use(cors({
 
     callback(new Error('Origine non autorisee par CORS'));
   },
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
 app.use(bodyParser.json({ limit: '32kb' }));
@@ -136,10 +137,9 @@ const draftSessionState = {
 const sessionSecrets = {
   adminEmail: null,
   adminPassword: null,
+  launchTokens: {},
   jwt: null,
-  jwtExpiresAt: null,
-  launchToken: null,
-  launchTokenExpiresAt: null
+  jwtExpiresAt: null
 };
 
 let ttlDestroyTimer = null;
@@ -212,7 +212,9 @@ function requireAdminToken(req, res, next) {
     return;
   }
 
-  const provided = req.get('X-Terminiator-Admin-Token') || '';
+  const provided =
+    req.get('X-Terminiator-Admin-Token') || '';
+
   if (provided === ADMIN_TOKEN) {
     next();
     return;
@@ -220,8 +222,52 @@ function requireAdminToken(req, res, next) {
 
   res.status(401).json({
     ok: false,
-    error: 'Token administrateur TerminIAtor invalide ou manquant'
+    error:
+      'Token administrateur TerminIAtor invalide ou manquant'
   });
+}
+
+async function requireSessionAccess(
+  req,
+  res,
+  next
+) {
+  const sessionId =
+    req.body.sessionId ||
+    req.params.sessionId ||
+    sessionState.databaseSessionId;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Identifiant de session manquant'
+    });
+  }
+
+  try {
+    const allowed =
+      await sessionRepository.canUserAccessSession(
+        sessionId,
+        req.auth.userId,
+        req.auth.tenantId
+      );
+
+    if (!allowed) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Acces refuse a cette session'
+      });
+    }
+
+    req.sessionId = sessionId;
+    next();
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error:
+        'Impossible de verifier l acces a la session'
+    });
+  }
 }
 
 function isValidIPv4Cidr(cidr) {
@@ -286,8 +332,7 @@ function clearSessionSecrets() {
   sessionSecrets.adminPassword = null;
   sessionSecrets.jwt = null;
   sessionSecrets.jwtExpiresAt = null;
-  sessionSecrets.launchToken = null;
-  sessionSecrets.launchTokenExpiresAt = null;
+  sessionSecrets.launchTokens = {};
 }
 
 function buildAccessNotes(authMode, workspaceUrl, adminEmail) {
@@ -374,9 +419,15 @@ function loadPersistedState() {
     if (parsed && parsed.draftSessionState && typeof parsed.draftSessionState === 'object') {
       Object.assign(draftSessionState, parsed.draftSessionState);
     }
-  if (parsed && parsed.sessionSecrets && typeof parsed.sessionSecrets === 'object') {
-    Object.assign(sessionSecrets, parsed.sessionSecrets);
-  }
+    if (parsed && parsed.sessionSecrets && typeof parsed.sessionSecrets === 'object') {
+      Object.assign(sessionSecrets, parsed.sessionSecrets);
+      if (!sessionSecrets.launchTokens || typeof sessionSecrets.launchTokens !== 'object') {
+        sessionSecrets.launchTokens = {};
+      }
+      delete sessionSecrets.launchToken;
+      delete sessionSecrets.launchTokenExpiresAt;
+      delete sessionSecrets.launchUserId;
+    }
   } catch (error) {
     pushLog(`Etat persiste ignore: ${error.message}`, 'error');
   }
@@ -575,35 +626,37 @@ app.get(
 
 app.post(
   '/api/session/open',
-
   authMiddleware.authenticate,
-
-  authMiddleware.requireRole(
-    'owner',
-    'admin'
-  ),
-
-  requireAdminToken,
-
+  authMiddleware.requireAuthentication,
+  requireSessionAccess,
   async (req, res) => {
-  try {
-    assertLocalAdminReady();
-    await ensureOpenWebUiJwt();
-    sessionSecrets.launchToken = crypto.randomBytes(24).toString('base64url');
-    sessionSecrets.launchTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    persistState();
+    try {
+      assertLocalAdminReady();
+      await ensureOpenWebUiJwt();
 
-    return res.json({
-      ok: true,
-      openUrl: `${getProxyBaseUrl(req)}/launch/${sessionSecrets.launchToken}`
-    });
-  } catch (error) {
-    return res.status(409).json({
-      ok: false,
-      error: error.message
-    });
+      const launchToken = crypto.randomBytes(24).toString('base64url');
+      const launchTokenExpiresAt = new Date(
+        Date.now() + 15 * 60 * 1000
+      ).toISOString();
+
+      sessionSecrets.launchTokens[launchToken] = {
+        userId: req.auth.userId,
+        expiresAt: launchTokenExpiresAt
+      };
+      persistState();
+
+      return res.json({
+        ok: true,
+        openUrl: `${getProxyBaseUrl(req)}/launch/${launchToken}`
+      });
+    } catch (error) {
+      return res.status(409).json({
+        ok: false,
+        error: error.message
+      });
+    }
   }
-});
+);
 
 app.get(
   '/api/public-cidr',
@@ -922,25 +975,51 @@ function proxyRequestToOpenWebUi(req, res, jwt) {
   req.pipe(proxyReq);
 }
 
-function proxyUpgradeToOpenWebUi(req, socket, head) {
+async function proxyUpgradeToOpenWebUi(
+  req,
+  socket,
+  head
+) {
   try {
     assertLocalAdminReady();
+
+    await new Promise((resolve, reject) => {
+      authMiddleware.authenticate(
+        req,
+        null,
+        (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        }
+      );
+    });
   } catch (_) {
     socket.destroy();
     return;
   }
 
-  const cookieToken = getCookieValue(req, PROXY_COOKIE_NAME);
+  const cookieToken = getCookieValue(
+    req,
+    PROXY_COOKIE_NAME
+  );
+  const launchEntry = cookieToken
+  ? sessionSecrets.launchTokens[cookieToken]
+  : null;
+
   if (
-    !cookieToken ||
-    !sessionSecrets.launchToken ||
-    cookieToken !== sessionSecrets.launchToken ||
+    !req.auth ||
+    !launchEntry ||
+    launchEntry.userId !== req.auth.userId ||
+    new Date(launchEntry.expiresAt).getTime() <= Date.now() ||
     !sessionSecrets.jwt
   ) {
     socket.destroy();
     return;
   }
-
   const targetBaseUrl = getOpenWebUiBaseUrl();
   if (!targetBaseUrl) {
     socket.destroy();
@@ -1056,10 +1135,9 @@ app.post(
 
   authMiddleware.authenticate,
 
-  authMiddleware.requireRole(
-    'owner',
-    'admin'
-  ),
+  authMiddleware.requireAuthentication,
+
+requireSessionAccess,
 
   requireAdminToken,
 
@@ -1177,7 +1255,7 @@ groupMembers = await groupRepository.listGroupMembers(
     });
   }
 
-  if (members.length > 3) {
+  if (groupMembers.length > 3) {
     return res.status(400).json({
       ok: false,
       error: 'Un groupe ne peut pas dépasser 3 membres.'
@@ -1347,9 +1425,11 @@ groupMembers = await groupRepository.listGroupMembers(
 }
 
     pushLog(
-      `Utilisateur createur autorise sur la session : ${databaseSession.id}`,
-      'info'
-    );
+  sessionMode === 'team'
+    ? `${groupMembers.length} membre(s) du groupe autorise(s) sur la session : ${databaseSession.id}`
+    : `Utilisateur createur autorise sur la session : ${databaseSession.id}`,
+  'info'
+);
 
 
 
@@ -1492,10 +1572,9 @@ sessionState.analysisType = analysisType;
       sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
       sessionSecrets.adminEmail = finalOwuiEmail;
       sessionSecrets.adminPassword = finalOwuiPassword;
+      sessionSecrets.launchTokens = {};
       sessionSecrets.jwt = null;
       sessionSecrets.jwtExpiresAt = null;
-      sessionSecrets.launchToken = null;
-      sessionSecrets.launchTokenExpiresAt = null;
       persistState();
 
       currentOperation.phase = 'readiness';
@@ -1578,6 +1657,7 @@ app.post(
   ),
 
   requireAdminToken,
+  
 
   async (req, res) => {
   if (currentOperation.status === 'running') {
@@ -1619,30 +1699,334 @@ app.post(
   }
 });
 
+
+/**
+ * Validation légère des identifiants UUID reçus dans les routes groupes.
+ */
+function isUuid(value) {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+/**
+ * Liste les groupes accessibles dans l'organisation courante.
+ * Cette route est utilisée par la page de création d'une session d'équipe.
+ */
+app.get(
+  '/api/groups',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  async (req, res) => {
+    try {
+     const groups =
+     await groupRepository.listGroupsByUserId(
+    req.auth.tenantId,
+    req.auth.userId
+  );
+      return res.json({
+        ok: true,
+        count: groups.length,
+        groups,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible de charger les groupes : ${error.message}`,
+      });
+    }
+  }
+);
+
+/**
+ * Liste tous les groupes du tenant pour l'administration.
+ */
+app.get(
+  '/api/admin/groups',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const groups = await groupRepository.listGroupsByTenantId(
+        req.auth.tenantId
+      );
+
+      return res.json({
+        ok: true,
+        count: groups.length,
+        groups,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible de charger les groupes : ${error.message}`,
+      });
+    }
+  }
+);
+
+/**
+ * Crée un groupe dans le tenant de l'administrateur connecté.
+ */
+app.post(
+  '/api/admin/groups',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const name = typeof req.body?.name === 'string'
+        ? req.body.name.trim()
+        : '';
+
+      if (name.length < 2 || name.length > 100) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Le nom du groupe doit contenir entre 2 et 100 caractères.',
+        });
+      }
+
+      const existingGroups = await groupRepository.listGroupsByTenantId(
+        req.auth.tenantId
+      );
+
+      const duplicate = existingGroups.some(
+        (group) => group.name.trim().toLowerCase() === name.toLowerCase()
+      );
+
+      if (duplicate) {
+        return res.status(409).json({
+          ok: false,
+          error: 'Un groupe portant ce nom existe déjà.',
+        });
+      }
+
+      const group = await groupRepository.createGroup({
+        tenantId: req.auth.tenantId,
+        name,
+        createdBy: req.auth.userId,
+      });
+
+      if (!group) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Impossible de créer le groupe.',
+        });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        message: 'Groupe créé avec succès.',
+        group: {
+          ...group,
+          members: [],
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible de créer le groupe : ${error.message}`,
+      });
+    }
+  }
+);
+
+/**
+ * Ajoute un utilisateur au groupe, avec une limite MVP de trois membres.
+ */
+app.post(
+  '/api/admin/groups/:groupId/members',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const userId = req.body?.userId;
+
+      if (!isUuid(groupId) || !isUuid(userId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de groupe ou d’utilisateur invalide.',
+        });
+      }
+
+      const group = await groupRepository.findGroupById(
+        groupId,
+        req.auth.tenantId
+      );
+
+      if (!group) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Groupe introuvable.',
+        });
+      }
+
+      const members = await groupRepository.listGroupMembers(
+        groupId,
+        req.auth.tenantId
+      );
+
+      if (members.some((member) => member.id === userId)) {
+        return res.status(409).json({
+          ok: false,
+          error: 'Cet utilisateur appartient déjà au groupe.',
+        });
+      }
+
+      if (members.length >= 3) {
+        return res.status(409).json({
+          ok: false,
+          error: 'Un groupe ne peut pas contenir plus de 3 membres.',
+        });
+      }
+
+      const membership = await groupRepository.addGroupMember({
+        groupId,
+        userId,
+        tenantId: req.auth.tenantId,
+      });
+
+      if (!membership) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Utilisateur introuvable dans cette organisation.',
+        });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        message: 'Membre ajouté au groupe.',
+        membership,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible d’ajouter le membre : ${error.message}`,
+      });
+    }
+  }
+);
+
+/**
+ * Retire un utilisateur d'un groupe.
+ */
+app.delete(
+  '/api/admin/groups/:groupId/members/:userId',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const { groupId, userId } = req.params;
+
+      if (!isUuid(groupId) || !isUuid(userId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de groupe ou d’utilisateur invalide.',
+        });
+      }
+
+      const removed = await groupRepository.removeGroupMember({
+        groupId,
+        userId,
+        tenantId: req.auth.tenantId,
+      });
+
+      if (!removed) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Membre ou groupe introuvable.',
+        });
+      }
+
+      return res.json({
+        ok: true,
+        message: 'Membre retiré du groupe.',
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible de retirer le membre : ${error.message}`,
+      });
+    }
+  }
+);
+
+/**
+ * Supprime un groupe et ses appartenances.
+ */
+app.delete(
+  '/api/admin/groups/:groupId',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const { groupId } = req.params;
+
+      if (!isUuid(groupId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de groupe invalide.',
+        });
+      }
+
+      const deleted = await groupRepository.deleteGroupByIdAndTenantId({
+        groupId,
+        tenantId: req.auth.tenantId,
+      });
+
+      if (!deleted) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Groupe introuvable.',
+        });
+      }
+
+      return res.json({
+        ok: true,
+        message: 'Groupe supprimé avec succès.',
+        group: deleted,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: `Impossible de supprimer le groupe : ${error.message}`,
+      });
+    }
+  }
+);
+
 restorePersistedSession();
 
-proxyApp.get('/launch/:token', async (req, res) => {
+proxyApp.get(
+  '/launch/:token',
+  authMiddleware.requireAuthentication,
+  async (req, res) => {
   try {
     assertLocalAdminReady();
-    if (
-      !sessionSecrets.launchToken ||
-      req.params.token !== sessionSecrets.launchToken ||
-      !sessionSecrets.launchTokenExpiresAt ||
-      new Date(sessionSecrets.launchTokenExpiresAt).getTime() <= Date.now()
-    ) {
+    const launchEntry = sessionSecrets.launchTokens[req.params.token];
+
+if (
+  !launchEntry ||
+  launchEntry.userId !== req.auth.userId ||
+  new Date(launchEntry.expiresAt).getTime() <= Date.now()
+) { 
       return res.status(403).send('Lien d ouverture expire ou invalide');
     }
 
     const jwt = await ensureOpenWebUiJwt();
     const remainingMs = Math.max(
       60 * 1000,
-      new Date(sessionSecrets.launchTokenExpiresAt).getTime() - Date.now()
+      new Date(launchEntry.expiresAt).getTime() - Date.now()
     );
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader(
       'Set-Cookie',
-      `${PROXY_COOKIE_NAME}=${sessionSecrets.launchToken}; Max-Age=${Math.floor(remainingMs / 1000)}; Path=/; HttpOnly; SameSite=Lax`
+      `${PROXY_COOKIE_NAME}=${req.params.token}; Max-Age=${Math.floor(remainingMs / 1000)}; Path=/; HttpOnly; SameSite=Lax`
     );
     return res.end(`<!doctype html>
 <html lang="fr">
@@ -1669,36 +2053,66 @@ proxyApp.get('/launch/:token', async (req, res) => {
 });
 
 proxyApp.get('/auth', (req, res, next) => {
-  const cookieToken = getCookieValue(req, PROXY_COOKIE_NAME);
+  const cookieToken = getCookieValue(
+    req,
+    PROXY_COOKIE_NAME
+  );
+  const launchEntry = cookieToken
+  ? sessionSecrets.launchTokens[cookieToken]
+  : null;
+
   if (
-    cookieToken &&
-    sessionSecrets.launchToken &&
-    cookieToken === sessionSecrets.launchToken &&
-    sessionSecrets.jwt
+   req.auth &&
+   launchEntry &&
+   launchEntry.userId === req.auth.userId &&
+   new Date(launchEntry.expiresAt).getTime() > Date.now() &&
+   sessionSecrets.jwt
   ) {
     return res.redirect('/');
   }
+
   return next();
 });
 
 proxyApp.use(async (req, res) => {
   try {
     assertLocalAdminReady();
-    const cookieToken = getCookieValue(req, PROXY_COOKIE_NAME);
-    if (
-      !cookieToken ||
-      !sessionSecrets.launchToken ||
-      cookieToken !== sessionSecrets.launchToken ||
-      !sessionSecrets.launchTokenExpiresAt ||
-      new Date(sessionSecrets.launchTokenExpiresAt).getTime() <= Date.now()
-    ) {
-      return res.status(403).send('Ouverture automatique invalide. Reviens dans TerminIAtor.');
+
+    const cookieToken = getCookieValue(
+      req,
+      PROXY_COOKIE_NAME
+    );
+    const launchEntry = cookieToken
+    ? sessionSecrets.launchTokens[cookieToken]
+    : null;
+
+   if (
+  !req.auth ||
+  !launchEntry ||
+  launchEntry.userId !== req.auth.userId ||
+  new Date(launchEntry.expiresAt).getTime() <= Date.now() ||
+  !sessionSecrets.jwt
+) {
+      return res
+        .status(403)
+        .send(
+          'Ouverture automatique invalide. Reviens dans TerminIAtor.'
+        );
     }
 
     const jwt = await ensureOpenWebUiJwt();
-    return proxyRequestToOpenWebUi(req, res, jwt);
+
+    return proxyRequestToOpenWebUi(
+      req,
+      res,
+      jwt
+    );
   } catch (error) {
-    return res.status(502).send(`Proxy OpenWebUI indisponible: ${error.message}`);
+    return res
+      .status(502)
+      .send(
+        `Proxy OpenWebUI indisponible: ${error.message}`
+      );
   }
 });
 

@@ -1,9 +1,16 @@
+const emailService = require(
+  '../services/email.service'
+);
+
 const userRepository = require(
   '../repositories/user.repository'
 );
 
 const invitationRepository = require(
   '../repositories/invitation.repository'
+);
+const passwordService = require(
+  '../services/password.service'
 );
 
 const invitationService = require(
@@ -214,8 +221,144 @@ async function listInvitations(
     return next(error);
   }
 }
+/**
+ * Supprime un utilisateur de l’organisation connectée.
+ */
+async function deleteUser(
+  request,
+  response,
+  next
+) {
+  try {
+    const userId =
+      typeof request.params?.userId ===
+      'string'
+        ? request.params.userId.trim()
+        : '';
+
+    if (!userId) {
+      return response.status(400).json({
+        error:
+          'L’identifiant utilisateur est obligatoire.',
+      });
+    }
+
+    if (
+      userId === request.auth.userId
+    ) {
+      return response.status(400).json({
+        error:
+          'Tu ne peux pas supprimer ton propre compte.',
+      });
+    }
+
+    const deletedUser =
+      await userRepository
+        .deleteUserByIdAndTenantId({
+          userId,
+          tenantId:
+            request.auth.tenantId,
+        });
+
+    if (!deletedUser) {
+      return response.status(404).json({
+        error:
+          'Utilisateur introuvable.',
+      });
+    }
+
+    return response.status(200).json({
+      message:
+        'Utilisateur supprimé avec succès.',
+
+      user: {
+        id: deletedUser.id,
+        email: deletedUser.email,
+        role: deletedUser.role,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+/**
+ * Réinitialise le mot de passe d’un utilisateur
+ * appartenant à l’organisation connectée.
+ */
+async function resetUserPassword(
+  request,
+  response,
+  next
+) {
+  try {
+    const userId =
+      typeof request.params?.userId ===
+      'string'
+        ? request.params.userId.trim()
+        : '';
+
+    const password =
+      typeof request.body?.password ===
+      'string'
+        ? request.body.password
+        : '';
+
+    if (!userId) {
+      return response.status(400).json({
+        error:
+          'L’identifiant utilisateur est obligatoire.',
+      });
+    }
+
+    if (!password) {
+      return response.status(400).json({
+        error:
+          'Le nouveau mot de passe est obligatoire.',
+      });
+    }
+
+    const passwordHash =
+      await passwordService
+        .hashPassword(password);
+
+    const updatedUser =
+      await userRepository
+        .updateUserPassword({
+          userId,
+          tenantId:
+            request.auth.tenantId,
+          passwordHash,
+        });
+
+    if (!updatedUser) {
+      return response.status(404).json({
+        error:
+          'Utilisateur introuvable.',
+      });
+    }
+    await emailService.sendPasswordEmail({
+  to: updatedUser.email,
+  password,
+});
+
+    return response.status(200).json({
+      message:
+        'Mot de passe réinitialisé avec succès.',
+
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        role: updatedUser.role,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
 module.exports = {
   listUsers,
+  deleteUser,
+  resetUserPassword,
   listInvitations,
   createInvitation,
 };
