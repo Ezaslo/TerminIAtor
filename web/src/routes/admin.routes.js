@@ -10,6 +10,10 @@ const authMiddleware = require(
 
 const router = express.Router();
 
+const validationMiddleware = require(
+  '../middleware/validation.middleware'
+);
+
 router.get(
   '/users',
 
@@ -31,6 +35,8 @@ router.post(
     'owner',
     'admin'
   ),
+
+  validationMiddleware.validateInvitationCreation,
 
   adminController.createInvitation
 );

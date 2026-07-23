@@ -4,6 +4,10 @@ const invitationController = require(
   '../controllers/invitation.controller'
 );
 
+const validationMiddleware = require(
+  '../middleware/validation.middleware'
+);
+
 const router = express.Router();
 
 router.post(
@@ -13,6 +17,7 @@ router.post(
 
 router.post(
   '/accept',
+  validationMiddleware.validateInvitationAcceptance,
   invitationController.acceptInvitation
 );
 
