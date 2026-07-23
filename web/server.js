@@ -11,6 +11,10 @@ const crypto = require('crypto');
 const database = require('./src/database/database');
 const healthRoutes = require('./src/routes/health.routes');
 
+const validationMiddleware = require(
+  './src/middleware/validation.middleware'
+);
+
 const {
   notFoundHandler,
   errorHandler
@@ -257,6 +261,7 @@ function requireAdminToken(req, res, next) {
       'Token administrateur TerminIAtor invalide ou manquant'
   });
 }
+
 
 async function requireSessionAccess(
   req,
@@ -1162,25 +1167,25 @@ async function waitForIaReady(ip, instanceType, expectedModel = null, instanceId
 }
 
 app.post(
-  '/api/deploy',
+'/api/deploy',
 
-  authMiddleware.authenticate,
+authMiddleware.authenticate,
+authMiddleware.requireAuthentication,
+requireAdminToken,
+validationMiddleware.validateDeployment,
 
-  authMiddleware.requireAuthentication,
-
-requireSessionAccess,
-
-  requireAdminToken,
-
-  async (req, res) => {
-  const {
-  workspaceName,
-  sessionTtlHours,
-  sessionMode,
-  groupId,
-  analysisType
+async (req, res) => {
+const {
+workspaceName,
+sessionTtlHours,
+sessionMode,
+groupId,
+analysisType
 } = req.body;
-const aiChoice = DEFAULT_DEPLOYMENT_CONFIG.aiChoice;
+
+
+const aiChoice =
+  DEFAULT_DEPLOYMENT_CONFIG.aiChoice;
 
 const instanceType =
   sessionMode === 'team'
@@ -1221,85 +1226,70 @@ const owuiPassword =
 
 const teamSizeHint =
   sessionMode === 'team' ? 3 : 1;
-  if (currentOperation.status === 'running') {
-    return res.status(409).json({
-      ok: false,
-      error: `Operation ${currentOperation.type} deja en cours`
-    });
-  }
-  if (!['individual', 'team'].includes(sessionMode)) {
-  return res.status(400).json({
+
+if (currentOperation.status === 'running') {
+  return res.status(409).json({
     ok: false,
-    error: 'Le mode de session est invalide'
+    error: `Operation ${currentOperation.type} deja en cours`
   });
 }
 
-if (
-  ![
-    'summary',
-    'sensitive-clauses',
-    'comparison',
-    'questions'
-  ].includes(analysisType)
-) {
-  return res.status(400).json({
-    ok: false,
-    error: "Le type d'analyse est invalide"
-  });
-}
-
-if (
-  sessionMode === 'team' &&
-  (
-    typeof groupId !== 'string' ||
-    groupId.trim() === ''
-  )
-) {
-  return res.status(400).json({
-    ok: false,
-    error: 'Un groupe est requis pour une session en equipe'
-  });
-}
 let groupMembers = [];
+
 if (sessionMode === 'team') {
-  const group = await groupRepository.findGroupById(
-    groupId.trim(),
-    req.auth.tenantId
-  );
+  const group =
+    await groupRepository.findGroupById(
+      groupId,
+      req.auth.tenantId
+    );
 
   if (!group) {
     return res.status(400).json({
       ok: false,
-      error: 'Le groupe sélectionné est introuvable.'
+      error:
+        'Le groupe sélectionné est introuvable.'
     });
   }
-groupMembers = await groupRepository.listGroupMembers(
-  group.id,
-  req.auth.tenantId
-);
 
+  groupMembers =
+    await groupRepository.listGroupMembers(
+      group.id,
+      req.auth.tenantId
+    );
 
   if (groupMembers.length === 0) {
     return res.status(400).json({
       ok: false,
-      error: 'Le groupe ne contient aucun membre.'
+      error:
+        'Le groupe ne contient aucun membre.'
     });
   }
 
   if (groupMembers.length > 3) {
     return res.status(400).json({
       ok: false,
-      error: 'Un groupe ne peut pas dépasser 3 membres.'
+      error:
+        'Un groupe ne peut pas dépasser 3 membres.'
     });
   }
 }
-  if (!AI_PULL_MAP[aiChoice]) {
-    return res.status(400).json({ ok: false, error: 'aiChoice invalide' });
-  }
 
-  if (!INSTANCE_TYPES.has(instanceType)) {
-    return res.status(400).json({ ok: false, error: 'instanceType invalide' });
-  }
+if (!AI_PULL_MAP[aiChoice]) {
+  return res.status(400).json({
+    ok: false,
+    error: 'aiChoice invalide'
+  });
+}
+
+if (!INSTANCE_TYPES.has(instanceType)) {
+  return res.status(400).json({
+    ok: false,
+    error: 'instanceType invalide'
+  });
+}
+
+
+
 
   if (!isValidIPv4Cidr(allowedCidr)) {
     return res.status(400).json({
@@ -1651,7 +1641,7 @@ sessionState.analysisType = analysisType;
        if (databaseSession) {
       await sessionRepository.updateSessionStatus(
         databaseSession.id,
-        'failed'
+        'ready'
       );
     }
     currentOperation.type = 'idle';
