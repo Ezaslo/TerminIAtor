@@ -89,7 +89,14 @@ async function migrate() {
       `Application de la migration : ${fileName}`
     );
 
-    await database.query(sql);
+  const statements = sql
+  .split(';')
+  .map((statement) => statement.trim())
+  .filter(Boolean);
+
+for (const statement of statements) {
+  await database.query(statement);
+}
 
     await database.query(
       `

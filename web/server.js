@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const fs = require('fs');
@@ -7,7 +7,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
-
+const groupRepository = require('./src/repositories/group.repository');
 const config = require('./src/config/env');
 const sessionRepository = require(
   './src/repositories/session.repository'
@@ -116,6 +116,7 @@ const sessionState = {
 };
 
 const draftSessionState = {
+  sessionTtlHours: null,
   active: false,
   status: 'idle',
   workspaceName: null,
@@ -172,7 +173,23 @@ const INSTANCE_TYPES = new Set([
   'g4dn.4xlarge',
   'g4dn.8xlarge'
 ]);
-
+const DEFAULT_DEPLOYMENT_CONFIG = Object.freeze({
+  aiChoice: 'qwen-7b',
+  individualInstanceType: 'g4dn.xlarge',
+  teamInstanceType: 'g4dn.xlarge',
+  allowedCidr:
+    process.env.TF_VAR_allowed_cidr || '127.0.0.1/32',
+  authMode: 'local_admin',
+  workspaceUrl: '',
+  trustedEmailHeader: 'X-User-Email',
+  trustedNameHeader: 'X-User-Name',
+  trustedGroupsHeader: 'X-User-Groups',
+  trustedRoleHeader: 'X-User-Role',
+  owuiName: 'TerminIAtor',
+  owuiEmail:
+    process.env.TERMINIATOR_OWUI_EMAIL ||
+    'admin@terminiator.local'
+});
 const INFRA_DESTROY_TARGETS = [
   'aws_instance.ai_host',
   'aws_security_group.ec2_min',
@@ -245,7 +262,6 @@ function maskEmail(email) {
   const visible = name.slice(0, 2);
   return `${visible}${'*'.repeat(Math.max(2, name.length - visible.length))}@${domain}`;
 }
-
 function clearSessionLikeState(target) {
   target.active = false;
   target.status = 'idle';
@@ -259,10 +275,12 @@ function clearSessionLikeState(target) {
   target.authMode = null;
   target.teamSizeHint = null;
   target.sessionTtlHours = null;
+  target.sessionMode = null;
+  target.groupId = null;
+  target.analysisType = null;
   target.createdAt = null;
   target.expiresAt = null;
 }
-
 function clearSessionSecrets() {
   sessionSecrets.adminEmail = null;
   sessionSecrets.adminPassword = null;
@@ -384,6 +402,8 @@ async function destroyInfraInternal(reason = 'manual') {
   pushLog(`Destruction complete demandee (${reason})`, 'info');
 
   let destroySucceeded = false;
+  const databaseSessionId =
+  sessionState.databaseSessionId;
 
   try {
     await runTerraform(
@@ -399,6 +419,12 @@ async function destroyInfraInternal(reason = 'manual') {
       }
     );
     destroySucceeded = true;
+        if (databaseSessionId) {
+      await sessionRepository.markSessionDestroyed(
+        databaseSessionId
+      );
+    }
+
   } finally {
     clearScheduledDestroy();
     clearSessionLikeState(sessionState);
@@ -1039,30 +1065,125 @@ app.post(
 
   async (req, res) => {
   const {
-    aiChoice,
-    instanceType,
-    allowedCidr,
-    workspaceName,
-    sessionTtlHours,
-    teamSizeHint,
-    workspaceUrl,
-    authMode,
-    trustedEmailHeader,
-    trustedNameHeader,
-    trustedGroupsHeader,
-    trustedRoleHeader,
-    owuiName,
-    owuiEmail,
-    owuiPassword
-  } = req.body;
+  workspaceName,
+  sessionTtlHours,
+  sessionMode,
+  groupId,
+  analysisType
+} = req.body;
+const aiChoice = DEFAULT_DEPLOYMENT_CONFIG.aiChoice;
 
+const instanceType =
+  sessionMode === 'team'
+    ? DEFAULT_DEPLOYMENT_CONFIG.teamInstanceType
+    : DEFAULT_DEPLOYMENT_CONFIG.individualInstanceType;
+
+const allowedCidr =
+  DEFAULT_DEPLOYMENT_CONFIG.allowedCidr;
+
+const authMode =
+  DEFAULT_DEPLOYMENT_CONFIG.authMode;
+
+const workspaceUrl =
+  DEFAULT_DEPLOYMENT_CONFIG.workspaceUrl;
+
+const trustedEmailHeader =
+  DEFAULT_DEPLOYMENT_CONFIG.trustedEmailHeader;
+
+const trustedNameHeader =
+  DEFAULT_DEPLOYMENT_CONFIG.trustedNameHeader;
+
+const trustedGroupsHeader =
+  DEFAULT_DEPLOYMENT_CONFIG.trustedGroupsHeader;
+
+const trustedRoleHeader =
+  DEFAULT_DEPLOYMENT_CONFIG.trustedRoleHeader;
+
+const owuiName =
+  DEFAULT_DEPLOYMENT_CONFIG.owuiName;
+
+const owuiEmail =
+  DEFAULT_DEPLOYMENT_CONFIG.owuiEmail;
+
+// Mot de passe généré automatiquement.
+// Il ne sera jamais demandé à l'utilisateur.
+const owuiPassword =
+  crypto.randomBytes(24).toString('base64url');
+
+const teamSizeHint =
+  sessionMode === 'team' ? 3 : 1;
   if (currentOperation.status === 'running') {
     return res.status(409).json({
       ok: false,
       error: `Operation ${currentOperation.type} deja en cours`
     });
   }
+  if (!['individual', 'team'].includes(sessionMode)) {
+  return res.status(400).json({
+    ok: false,
+    error: 'Le mode de session est invalide'
+  });
+}
 
+if (
+  ![
+    'summary',
+    'sensitive-clauses',
+    'comparison',
+    'questions'
+  ].includes(analysisType)
+) {
+  return res.status(400).json({
+    ok: false,
+    error: "Le type d'analyse est invalide"
+  });
+}
+
+if (
+  sessionMode === 'team' &&
+  (
+    typeof groupId !== 'string' ||
+    groupId.trim() === ''
+  )
+) {
+  return res.status(400).json({
+    ok: false,
+    error: 'Un groupe est requis pour une session en equipe'
+  });
+}
+let groupMembers = [];
+if (sessionMode === 'team') {
+  const group = await groupRepository.findGroupById(
+    groupId.trim(),
+    req.auth.tenantId
+  );
+
+  if (!group) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Le groupe sélectionné est introuvable.'
+    });
+  }
+groupMembers = await groupRepository.listGroupMembers(
+  group.id,
+  req.auth.tenantId
+);
+
+
+  if (groupMembers.length === 0) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Le groupe ne contient aucun membre.'
+    });
+  }
+
+  if (members.length > 3) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Un groupe ne peut pas dépasser 3 membres.'
+    });
+  }
+}
   if (!AI_PULL_MAP[aiChoice]) {
     return res.status(400).json({ ok: false, error: 'aiChoice invalide' });
   }
@@ -1212,15 +1333,43 @@ app.post(
         expiresAt: sessionExpiresAt,
       });
 
+    await sessionRepository.addUserToSession(
+      databaseSession.id,
+      req.auth.userId
+    );
+   if (sessionMode === 'team') {
+  for (const member of groupMembers) {
+    await sessionRepository.addUserToSession(
+      databaseSession.id,
+      member.id
+    );
+  }
+}
+
+    pushLog(
+      `Utilisateur createur autorise sur la session : ${databaseSession.id}`,
+      'info'
+    );
+
+
+
     pushLog(
       `Session PostgreSQL creee : ${databaseSession.id}`,
       'info'
     );
+    sessionState.databaseSessionId = databaseSession.id;
+    draftSessionState.databaseSessionId = databaseSession.id;
+    persistState();
 
-    pushLog(
-      `Nouvelle session equipe (${finalWorkspaceName}, auth_mode=${finalAuthMode}, instance=${finalInstanceType}, ttl=${finalSessionTtlHours}h)`,
-      'info'
-    );
+    const sessionModeLabel =
+  sessionMode === 'team'
+    ? 'equipe'
+    : 'individuelle';
+
+pushLog(
+  `Nouvelle session ${sessionModeLabel} (${finalWorkspaceName}, auth_mode=${finalAuthMode}, instance=${finalInstanceType}, ttl=${finalSessionTtlHours}h)`,
+  'info'
+);
     pushLog(`Compte bootstrap OpenWebUI: ${maskEmail(finalOwuiEmail)}`, 'info');
     pushLog(`CIDR autorise: ${finalAllowedCidr}`, 'info');
     if (expectedModel) {
@@ -1258,8 +1407,17 @@ app.post(
     draftSessionState.authMode = finalAuthMode;
     draftSessionState.teamSizeHint = finalTeamSizeHint;
     draftSessionState.sessionTtlHours = finalSessionTtlHours;
+    draftSessionState.sessionMode = sessionMode;
+
+      draftSessionState.groupId =
+      sessionMode === 'team'
+        ? groupId.trim()
+        : null;
+    draftSessionState.analysisType = analysisType;
     draftSessionState.createdAt = new Date().toISOString();
-    draftSessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
+    draftSessionState.expiresAt = new Date(
+      Date.now() + finalSessionTtlHours * 60 * 60 * 1000
+    ).toISOString();
     persistState();
 
     pushLog(
@@ -1324,6 +1482,12 @@ app.post(
       sessionState.authMode = finalAuthMode;
       sessionState.teamSizeHint = finalTeamSizeHint;
       sessionState.sessionTtlHours = finalSessionTtlHours;
+      sessionState.sessionMode = sessionMode;
+sessionState.groupId =
+  sessionMode === 'team'
+    ? groupId.trim()
+    : null;
+sessionState.analysisType = analysisType;
       sessionState.createdAt = new Date().toISOString();
       sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
       sessionSecrets.adminEmail = finalOwuiEmail;
@@ -1374,12 +1538,12 @@ app.post(
     currentOperation.status = 'success';
     currentOperation.phase = 'idle';
     currentOperation.cancelReadiness = false;
-    if (databaseSession) {
-  await sessionRepository.updateSessionStatus(
-    databaseSession.id,
-    'failed'
-  );
-}
+       if (databaseSession) {
+      await sessionRepository.updateSessionStatus(
+        databaseSession.id,
+        'failed'
+      );
+    }
     currentOperation.type = 'idle';
     scheduleDestroyFromTtl(finalSessionTtlHours);
 
@@ -1553,3 +1717,5 @@ const proxyServer = proxyApp.listen(PROXY_PORT, () => {
 });
 
 proxyServer.on('upgrade', proxyUpgradeToOpenWebUi);
+
+

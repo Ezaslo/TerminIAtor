@@ -60,6 +60,10 @@ function query(
   sql,
   parameters = []
 ) {
+  if (parameters.length === 0) {
+    return getPool().query(sql);
+  }
+
   return getPool().query(
     sql,
     parameters
