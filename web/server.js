@@ -1,5 +1,7 @@
 ﻿const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
@@ -57,6 +59,26 @@ const ALLOWED_ORIGINS =
 
 const TERRAFORM_BIN =
   config.terraform.binary;
+
+  app.use(
+  helmet({
+    // Désactivée provisoirement pour éviter de casser l’interface existante.
+    // On configurera une vraie CSP plus tard.
+    contentSecurityPolicy: false
+  })
+);
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Trop de tentatives de connexion. Réessaie dans 15 minutes.'
+  }
+});
+
+app.use('/api/auth/login', loginLimiter);
 app.use(cors({
   origin(origin, callback) {
     if (!origin || ALLOWED_ORIGINS.has(origin)) {
