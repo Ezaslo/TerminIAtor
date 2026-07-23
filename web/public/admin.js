@@ -20,6 +20,14 @@ const groupName = document.getElementById('group-name');
 const groupSubmit = document.getElementById('group-submit');
 const groupMessage = document.getElementById('group-message');
 
+const passwordForm = document.getElementById('password-form');
+const currentPasswordInput = document.getElementById('current-password');
+const newPasswordInput = document.getElementById('new-password');
+const confirmPasswordInput = document.getElementById('confirm-password');
+const passwordSubmit = document.getElementById('password-submit');
+const passwordMessage = document.getElementById('password-message');
+const adminOnlyElements = document.querySelectorAll('.admin-only');
+
 let authenticatedUser = null;
 let tenantUsers = [];
 
@@ -49,6 +57,17 @@ function setMessage(element, message, type = '') {
 
 function displayPageMessage(message, type = '') {
   setMessage(pageMessage, message, type);
+}
+
+function isAdministrator(user) {
+  return ['owner', 'admin'].includes(user?.role);
+}
+
+function configurePageForRole(user) {
+  const administrator = isAdministrator(user);
+  adminOnlyElements.forEach((element) => {
+    element.hidden = !administrator;
+  });
 }
 
 async function requestJson(url, { method = 'GET', body } = {}) {
@@ -437,8 +456,15 @@ async function refreshGroups() {
 async function loadAdministrationPage(authentication) {
   authenticatedUser = authentication?.user || null;
 
-  if (!['owner', 'admin'].includes(authenticatedUser?.role)) {
-    window.location.replace('/');
+  if (!authenticatedUser) {
+    window.location.replace('/login.html');
+    return;
+  }
+
+  configurePageForRole(authenticatedUser);
+
+  if (!isAdministrator(authenticatedUser)) {
+    displayPageMessage('');
     return;
   }
 
@@ -458,6 +484,49 @@ async function loadAdministrationPage(authentication) {
     displayPageMessage(error.message, 'error');
   }
 }
+
+passwordForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(passwordMessage, '');
+
+  const currentPassword = currentPasswordInput.value;
+  const newPassword = newPasswordInput.value;
+  const confirmPassword = confirmPasswordInput.value;
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    setMessage(passwordMessage, 'Tous les champs sont obligatoires.', 'error');
+    return;
+  }
+  if (newPassword.length < 12 || newPassword.length > 200) {
+    setMessage(passwordMessage, 'Le nouveau mot de passe doit contenir entre 12 et 200 caractères.', 'error');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    setMessage(passwordMessage, 'La confirmation ne correspond pas au nouveau mot de passe.', 'error');
+    return;
+  }
+  if (currentPassword === newPassword) {
+    setMessage(passwordMessage, 'Le nouveau mot de passe doit être différent du mot de passe actuel.', 'error');
+    return;
+  }
+
+  passwordSubmit.disabled = true;
+  passwordSubmit.textContent = 'Modification…';
+
+  try {
+    const data = await requestJson('/api/auth/password', {
+      method: 'PATCH',
+      body: { currentPassword, newPassword, confirmPassword },
+    });
+    passwordForm.reset();
+    setMessage(passwordMessage, data.message || 'Mot de passe modifié avec succès.', 'success');
+  } catch (error) {
+    setMessage(passwordMessage, error.message, 'error');
+  } finally {
+    passwordSubmit.disabled = false;
+    passwordSubmit.textContent = 'Modifier mon mot de passe';
+  }
+});
 
 invitationForm.addEventListener('submit', async (event) => {
   event.preventDefault();

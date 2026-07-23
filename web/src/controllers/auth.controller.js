@@ -172,8 +172,42 @@ async function logout(
     return next(error);
   }
 }
+
+async function changePassword(request, response, next) {
+  try {
+    const { currentPassword, newPassword } = request.body;
+    const user = await userRepository.findUserCredentialsById(request.auth.userId);
+
+    if (!user) return response.status(404).json({ error: 'Utilisateur introuvable.' });
+    if (!await passwordService.verifyPassword(currentPassword, user.password_hash)) {
+      return response.status(401).json({ error: 'Le mot de passe actuel est incorrect.' });
+    }
+    if (await passwordService.verifyPassword(newPassword, user.password_hash)) {
+      return response.status(400).json({ error: 'Le nouveau mot de passe doit être différent du mot de passe actuel.' });
+    }
+
+    const newPasswordHash = await passwordService.hashPassword(newPassword);
+    const updatedUser = await userRepository.updatePasswordHashById({
+      userId: request.auth.userId,
+      passwordHash: newPasswordHash
+    });
+    if (!updatedUser) return response.status(404).json({ error: 'Impossible de mettre à jour le mot de passe.' });
+
+    const revokedSessions = await authSessionRepository.revokeOtherAuthSessionsByUserId({
+      userId: request.auth.userId,
+      currentSessionId: request.auth.sessionId
+    });
+    return response.status(200).json({
+      message: 'Mot de passe modifié avec succès.',
+      revokedSessions: revokedSessions.length
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
 module.exports = {
   login,
   logout,
   getCurrentUser,
+  changePassword,
 };

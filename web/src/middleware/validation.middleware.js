@@ -178,9 +178,34 @@ function validateDeployment(req, res, next) {
   return next();
 }
 
+function validatePasswordChange(req, res, next) {
+  const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+  const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+  const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    return res.status(400).json({ error: 'Le mot de passe actuel, le nouveau mot de passe et sa confirmation sont obligatoires.' });
+  }
+  if (newPassword.length < 12 || newPassword.length > 200) {
+    return res.status(400).json({ error: 'Le nouveau mot de passe doit contenir entre 12 et 200 caractères.' });
+  }
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ error: 'La confirmation du nouveau mot de passe ne correspond pas.' });
+  }
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ error: 'Le nouveau mot de passe doit être différent du mot de passe actuel.' });
+  }
+
+  req.body.currentPassword = currentPassword;
+  req.body.newPassword = newPassword;
+  delete req.body.confirmPassword;
+  return next();
+}
+
 module.exports = {
   validateLogin,
   validateInvitationCreation,
   validateInvitationAcceptance,
-  validateDeployment
+  validateDeployment,
+  validatePasswordChange
 };

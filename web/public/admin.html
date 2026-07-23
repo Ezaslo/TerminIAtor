@@ -218,6 +218,55 @@
       gap: 16px;
     }
 
+    .password-form {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+      align-items: start;
+      gap: 16px;
+    }
+
+    .password-form .field {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .password-form label {
+      min-height: 22px;
+      display: flex;
+      align-items: flex-end;
+      margin-bottom: 8px;
+    }
+
+    .password-form input {
+      width: 100%;
+      min-height: 44px;
+      box-sizing: border-box;
+    }
+
+    .password-form .field-help {
+      min-height: 18px;
+      margin: 7px 0 0;
+    }
+
+    #password-submit {
+      align-self: start;
+      margin-top: 30px;
+      min-height: 44px;
+      white-space: nowrap;
+    }
+
+    .field-help {
+      margin: 7px 0 0;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
     .field label {
       display: block;
       margin-bottom: 8px;
@@ -489,8 +538,14 @@
 
       .invitation-form,
       .group-form,
-      .member-form {
+      .member-form,
+      .password-form {
         grid-template-columns: 1fr;
+      }
+
+      #password-submit {
+        margin-top: 0;
+        width: 100%;
       }
 
       .panel-header {
@@ -544,7 +599,42 @@
     ></p>
 
     <section
-      class="statistics"
+      id="password-panel"
+      class="panel"
+      aria-labelledby="password-panel-title"
+    >
+      <div class="panel-header">
+        <div>
+          <h2 id="password-panel-title">Changer mon mot de passe</h2>
+          <p>
+            Modifiez le mot de passe de votre propre compte TerminIAtor.
+            Les autres connexions ouvertes seront déconnectées.
+          </p>
+        </div>
+      </div>
+
+      <form id="password-form" class="password-form" novalidate>
+        <div class="field">
+          <label for="current-password">Mot de passe actuel</label>
+          <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required>
+        </div>
+        <div class="field">
+          <label for="new-password">Nouveau mot de passe</label>
+          <input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="200" required aria-describedby="password-requirements">
+          <p id="password-requirements" class="field-help">Entre 12 et 200 caractères.</p>
+        </div>
+        <div class="field">
+          <label for="confirm-password">Confirmer le nouveau mot de passe</label>
+          <input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="200" required>
+        </div>
+        <button id="password-submit" class="primary-button" type="submit">Modifier mon mot de passe</button>
+      </form>
+
+      <p id="password-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section
+      class="statistics admin-only"
       aria-label="Statistiques"
     >
       <article class="statistic-card">
@@ -600,7 +690,7 @@
       </article>
     </section>
 
-    <section class="panel">
+    <section class="panel admin-only">
       <div class="panel-header">
         <div>
           <h2>Inviter un utilisateur</h2>
@@ -668,7 +758,7 @@
       ></p>
     </section>
 
-    <section class="panel">
+    <section class="panel admin-only">
       <div class="panel-header">
         <div>
           <h2>Utilisateurs</h2>
@@ -706,7 +796,7 @@
     </section>
 
 
-    <section class="panel">
+    <section class="panel admin-only">
       <div class="panel-header">
         <div>
           <h2>Créer un groupe</h2>
@@ -748,7 +838,7 @@
       ></p>
     </section>
 
-    <section class="panel">
+    <section class="panel admin-only">
       <div class="panel-header">
         <div>
           <h2>Groupes</h2>
@@ -764,7 +854,7 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel admin-only">
       <div class="panel-header">
         <div>
           <h2>Invitations en attente</h2>

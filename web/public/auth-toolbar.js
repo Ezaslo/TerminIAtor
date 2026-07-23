@@ -56,7 +56,7 @@ function displayAuthenticationToolbar(
       authentication.user.tenantName
     }`;
 adminLink.hidden =
-  !['owner', 'admin'].includes(
+  !['owner', 'admin', 'member'].includes(
     authentication.user.role
   );
   Object.assign(toolbar.style, {

@@ -112,6 +112,28 @@ async function findUserById(id) {
 
   return result.rows[0] || null;
 }
+
+async function findUserCredentialsById(id) {
+  if (!id) return null;
+  const result = await database.query(
+    `SELECT id, tenant_id, email, password_hash, role, created_at
+     FROM users WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+async function updatePasswordHashById({ userId, passwordHash }) {
+  if (!userId || !passwordHash) {
+    throw new Error('L’utilisateur et le nouveau hash du mot de passe sont obligatoires.');
+  }
+  const result = await database.query(
+    `UPDATE users SET password_hash = $2 WHERE id = $1
+     RETURNING id, tenant_id, email, role`,
+    [userId, passwordHash]
+  );
+  return result.rows[0] || null;
+}
 /**
  * Liste les utilisateurs d’une organisation.
  *
@@ -184,6 +206,8 @@ module.exports = {
   createUser,
   findUserByEmail,
   findUserById,
+  findUserCredentialsById,
+  updatePasswordHashById,
   deleteUserByIdAndTenantId,
   listUsersByTenantId,
 };

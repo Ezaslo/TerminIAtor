@@ -202,11 +202,25 @@ async function deleteInactiveAuthSessions() {
   return result.rowCount;
 }
 
+async function revokeOtherAuthSessionsByUserId({ userId, currentSessionId }) {
+  if (!userId || !currentSessionId) {
+    throw new Error('L’utilisateur et la session actuelle sont obligatoires.');
+  }
+  const result = await database.query(
+    `UPDATE auth_sessions SET revoked_at = NOW()
+     WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
+     RETURNING id, revoked_at`,
+    [userId, currentSessionId]
+  );
+  return result.rows;
+}
+
 module.exports = {
   createAuthSession,
   findActiveSessionByTokenHash,
   touchAuthSession,
   revokeAuthSessionByTokenHash,
   revokeAuthSessionById,
+  revokeOtherAuthSessionsByUserId,
   deleteInactiveAuthSessions,
 };
