@@ -1,4 +1,4 @@
- 
+﻿ 
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -8,16 +8,16 @@
     <script src="/auth-guard.js"></script>
     <script src="/auth-toolbar.js" defer></script>
 
-    <title>TerminIAtor - Espace d'analyse sécurisé</title>
+    <title>Privalyse - Espace d'analyse sÃ©curisÃ©</title>
     <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
     <div class="app">
         <header class="header">
-            <h1>TerminIAtor</h1>
+            <h1>Privalyse</h1>
             <p>
-                Crée un espace temporaire et sécurisé pour analyser tes contrats.
+                CrÃ©e un espace temporaire et sÃ©curisÃ© pour analyser tes contrats.
             </p>
         </header>
 
@@ -26,8 +26,8 @@
                 <h2>Nouvel espace d'analyse</h2>
 
                 <p class="helper-text">
-                    Renseigne ton besoin. TerminIAtor configure automatiquement
-                    l'environnement nécessaire.
+                    Renseigne ton besoin. Privalyse configure automatiquement
+                    l'environnement nÃ©cessaire.
                 </p>
 
                 <div class="credentials-form">
@@ -49,7 +49,7 @@
                 <h2>Mode de travail</h2>
 
                 <p class="helper-text">
-                    Choisis si cet espace est réservé à ton usage ou partagé avec une équipe.
+                    Choisis si cet espace est rÃ©servÃ© Ã  ton usage ou partagÃ© avec une Ã©quipe.
                 </p>
 
                 <div class="credentials-form">
@@ -63,7 +63,7 @@
 
                         <span>
                             <strong>Individuel</strong><br />
-                            <small>Un espace privé réservé à ton compte.</small>
+                            <small>Un espace privÃ© rÃ©servÃ© Ã  ton compte.</small>
                         </span>
                     </label>
 
@@ -75,8 +75,8 @@
                         />
 
                         <span>
-                            <strong>Équipe</strong><br />
-                            <small>Un espace partagé avec un groupe autorisé.</small>
+                            <strong>Ã‰quipe</strong><br />
+                            <small>Un espace partagÃ© avec un groupe autorisÃ©.</small>
                         </span>
                     </label>
                 </div>
@@ -87,29 +87,29 @@
                     style="display: none; margin-top: 1rem;"
                 >
                     <div class="credential-field">
-                        <label for="groupId">Groupe autorisé</label>
+                        <label for="groupId">Groupe autorisÃ©</label>
 
                         <select id="groupId">
-                            <option value="">Sélectionner un groupe</option>
+                            <option value="">SÃ©lectionner un groupe</option>
                         </select>
 
                         <p id="groupDescription" class="helper-text">
-                            Les groupes disponibles seront chargés depuis TerminIAtor.
+                            Les groupes disponibles seront chargÃ©s depuis Privalyse.
                         </p>
                     </div>
                 </div>
             </section>
 
             <section class="workspace-section">
-                <h2>Durée de disponibilité</h2>
+                <h2>DurÃ©e de disponibilitÃ©</h2>
 
                 <p class="helper-text">
-                    L'espace et ses données seront automatiquement supprimés à expiration.
+                    L'espace et ses donnÃ©es seront automatiquement supprimÃ©s Ã  expiration.
                 </p>
 
                 <div class="credentials-form">
                     <div class="credential-field">
-                        <label for="sessionTtlHours">Durée</label>
+                        <label for="sessionTtlHours">DurÃ©e</label>
 
                         <select id="sessionTtlHours">
                             <option value="1">1 heure</option>
@@ -126,23 +126,23 @@
                 <h2>Type d'analyse</h2>
 
                 <p class="helper-text">
-                    Cette sélection prépare l'expérience d'analyse dans ton espace sécurisé.
+                    Cette sÃ©lection prÃ©pare l'expÃ©rience d'analyse dans ton espace sÃ©curisÃ©.
                 </p>
 
                 <div class="credentials-form">
                     <div class="credential-field">
-                        <label for="analysisType">Analyse souhaitée</label>
+                        <label for="analysisType">Analyse souhaitÃ©e</label>
 
                         <select id="analysisType">
-                            <option value="summary">Synthèse du contrat</option>
+                            <option value="summary">SynthÃ¨se du contrat</option>
                             <option value="sensitive-clauses">
-                                Détection des clauses sensibles
+                                DÃ©tection des clauses sensibles
                             </option>
                             <option value="comparison">
                                 Comparaison de contrats
                             </option>
                             <option value="questions">
-                                Questions-réponses sur les documents
+                                Questions-rÃ©ponses sur les documents
                             </option>
                         </select>
                     </div>
@@ -150,20 +150,20 @@
             </section>
 
             <section class="status-panel">
-                <h2>Résumé</h2>
+                <h2>RÃ©sumÃ©</h2>
 
                 <div id="sessionSummaryPreview">
                     <strong>Analyse de contrats</strong><br />
                     Mode : Individuel<br />
-                    Durée : 6 heures<br />
-                    Analyse : Synthèse du contrat<br />
-                    Suppression automatique à expiration
+                    DurÃ©e : 6 heures<br />
+                    Analyse : SynthÃ¨se du contrat<br />
+                    Suppression automatique Ã  expiration
                 </div>
             </section>
 
             <section class="actions">
                 <button id="deployBtn" class="primary-btn">
-                    Créer l'espace sécurisé
+                    CrÃ©er l'espace sÃ©curisÃ©
                 </button>
 
                 <button
@@ -184,7 +184,7 @@
             </section>
 
             <details id="logsSection" class="logs-section" style="display: none;">
-                <summary>Voir les détails techniques</summary>
+                <summary>Voir les dÃ©tails techniques</summary>
 
                 <div id="logs" class="logs-console"></div>
             </details>

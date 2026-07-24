@@ -182,6 +182,8 @@ const sessionSecrets = {
 };
 
 let ttlDestroyTimer = null;
+const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
+  5 * 60 * 1000;
 const PROXY_COOKIE_NAME = 'terminiator_launch_token';
 
 const AI_PULL_MAP = {
@@ -219,7 +221,7 @@ const DEFAULT_DEPLOYMENT_CONFIG = Object.freeze({
   trustedNameHeader: 'X-User-Name',
   trustedGroupsHeader: 'X-User-Groups',
   trustedRoleHeader: 'X-User-Role',
-  owuiName: 'TerminIAtor',
+  owuiName: 'Privalyse',
   owuiEmail:
     process.env.TERMINIATOR_OWUI_EMAIL ||
     'admin@terminiator.local'
@@ -241,7 +243,7 @@ function requireAdminToken(req, res, next) {
   res.status(401).json({
     ok: false,
     error:
-      'Token administrateur TerminIAtor invalide ou manquant'
+      'Token administrateur Privalyse invalide ou manquant'
   });
 }
 
@@ -330,6 +332,7 @@ function maskEmail(email) {
 function clearSessionLikeState(target) {
   target.active = false;
   target.status = 'idle';
+  target.databaseSessionId = null;
   target.workspaceName = null;
   target.workspaceSlug = null;
   target.accessUrl = null;
@@ -459,80 +462,197 @@ function clearScheduledDestroy() {
   }
 }
 
-async function destroySessionInternal(reason = 'manual') {
-  return destroyInfraInternal(reason);
+async function destroySessionInternal(
+  sessionId,
+  reason = 'manual'
+) {
+  return destroyInfraInternal(
+    sessionId,
+    reason
+  );
 }
 
-async function destroyInfraInternal(reason = 'manual') {
+async function destroyInfraInternal(
+  sessionId,
+  reason = 'manual'
+) {
   currentOperation.type = 'destroy';
   currentOperation.status = 'running';
   currentOperation.phase = 'terraform';
   currentOperation.cancelReadiness = false;
   currentOperation.logs = [];
-  pushLog(`Destruction complete demandee (${reason})`, 'info');
+
+  pushLog(
+    `Destruction complete demandee pour la session ${sessionId} (${reason})`,
+    'info'
+  );
 
   let destroySucceeded = false;
-  const databaseSessionId =
-  sessionState.databaseSessionId;
 
   try {
+    const databaseSession =
+      await sessionRepository.getSessionById(
+        sessionId
+      );
+
+    if (!databaseSession) {
+      throw new Error('Session introuvable.');
+    }
+
+    if (databaseSession.status === 'destroyed') {
+      throw new Error(
+        'Cette session est deja detruite.'
+      );
+    }
+
+    if (!databaseSession.terraform_directory) {
+      throw new Error(
+        'Dossier Terraform introuvable pour cette session.'
+      );
+    }
+
     await runTerraform(
       [
         'destroy',
         '-auto-approve'
       ],
       {
-        TF_VAR_allowed_cidr: process.env.TF_VAR_allowed_cidr || '127.0.0.1/32',
-        TF_VAR_webui_secret_key:
-          process.env.TF_VAR_webui_secret_key || crypto.randomBytes(48).toString('hex')
-      }
-    );
-    destroySucceeded = true;
-        if (databaseSessionId) {
-      await sessionRepository.markSessionDestroyed(
-        databaseSessionId
-      );
-    }
+        TF_VAR_allowed_cidr:
+          process.env.TF_VAR_allowed_cidr ||
+          '127.0.0.1/32',
 
+        TF_VAR_webui_secret_key:
+          process.env.TF_VAR_webui_secret_key ||
+          crypto.randomBytes(48).toString('hex')
+      },
+      databaseSession.terraform_directory
+    );
+
+    await sessionRepository.markSessionDestroyed(
+      sessionId
+    );
+
+    destroySucceeded = true;
   } finally {
     clearScheduledDestroy();
-    clearSessionLikeState(sessionState);
-    clearSessionLikeState(draftSessionState);
-    clearSessionSecrets();
-    persistState();
-    currentOperation.status = destroySucceeded ? 'success' : 'error';
+
+    if (
+      sessionState.databaseSessionId === sessionId
+    ) {
+      clearSessionLikeState(sessionState);
+      clearSessionLikeState(draftSessionState);
+      clearSessionSecrets();
+      persistState();
+    }
+
+    currentOperation.status =
+      destroySucceeded ? 'success' : 'error';
     currentOperation.phase = 'idle';
-    currentOperation.type = destroySucceeded ? 'idle' : currentOperation.type;
+    currentOperation.type =
+      destroySucceeded ? 'idle' : currentOperation.type;
   }
 }
 
-function scheduleDestroyFromTtl(hours) {
+function scheduleDestroyFromTtl(
+  sessionId,
+  hours
+) {
   clearScheduledDestroy();
 
   const ttlMs = hours * 60 * 60 * 1000;
+
   ttlDestroyTimer = setTimeout(async () => {
-    if (!sessionState.active || currentOperation.status === 'running') {
+    if (currentOperation.status === 'running') {
       return;
     }
 
     pushLog(
-      `TTL atteint (${hours}h). Lancement de la destruction automatique de la session.`,
+      `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
       'info'
     );
 
     try {
-      await destroySessionInternal('ttl');
-      pushLog('Destruction automatique terminee', 'success');
+      await destroySessionInternal(
+        sessionId,
+        'ttl'
+      );
+
+      pushLog(
+        'Destruction automatique terminee',
+        'success'
+      );
     } catch (error) {
       currentOperation.status = 'error';
       currentOperation.phase = 'idle';
       currentOperation.cancelReadiness = false;
-      pushLog(`Erreur destruction automatique: ${error.message}`, 'error');
+
+      pushLog(
+        `Erreur destruction automatique: ${error.message}`,
+        'error'
+      );
+
       persistState();
     }
   }, ttlMs);
 }
+/**
+ * Détruit les infrastructures associées aux sessions
+ * PostgreSQL dont la date d'expiration est dépassée.
+ */
+async function cleanupExpiredSessions() {
+  if (currentOperation.status === 'running') {
+    pushLog(
+      'Nettoyage des sessions expirées reporté : une opération est déjà en cours.',
+      'info'
+    );
 
+    return;
+  }
+
+  const expiredSessions =
+    await sessionRepository.listExpiredSessions(10);
+
+  if (expiredSessions.length === 0) {
+    return;
+  }
+
+  pushLog(
+    `${expiredSessions.length} session(s) expirée(s) détectée(s).`,
+    'info'
+  );
+
+  for (const expiredSession of expiredSessions) {
+    if (currentOperation.status === 'running') {
+      break;
+    }
+
+    try {
+      pushLog(
+        `Destruction automatique de la session expirée ${expiredSession.id}.`,
+        'info'
+      );
+
+      await destroySessionInternal(
+        expiredSession.id,
+        'expired-cleanup'
+      );
+
+      pushLog(
+        `Session expirée ${expiredSession.id} détruite.`,
+        'success'
+      );
+    } catch (error) {
+      currentOperation.status = 'error';
+      currentOperation.phase = 'idle';
+      currentOperation.cancelReadiness = false;
+
+      pushLog(
+        `Impossible de détruire la session expirée ${expiredSession.id} : ${error.message}`,
+        'error'
+      );
+    }
+  }
+}
 function restorePersistedSession() {
   loadPersistedState();
   if (!sessionState.active || !sessionState.expiresAt) {
@@ -554,7 +674,10 @@ function restorePersistedSession() {
       );
 
       try {
-        await destroySessionInternal('ttl');
+        await destroySessionInternal(
+          sessionState.databaseSessionId,
+          'ttl'
+        );
         pushLog('Destruction automatique terminee', 'success');
       } catch (error) {
         currentOperation.status = 'error';
@@ -584,7 +707,7 @@ app.get(
   if (ADMIN_TOKEN_ENABLED && (req.query.token || '') !== ADMIN_TOKEN) {
     return res.status(401).json({
       ok: false,
-      error: 'Token administrateur TerminIAtor invalide ou manquant'
+      error: 'Token administrateur Privalyse invalide ou manquant'
     });
   }
 
@@ -1868,7 +1991,10 @@ sessionState.analysisType = analysisType;
       );
     }
     currentOperation.type = 'idle';
-    scheduleDestroyFromTtl(finalSessionTtlHours);
+    scheduleDestroyFromTtl(
+      databaseSession.id,
+      finalSessionTtlHours
+    );
 
     return res.json({ ok: true });
   } catch (e) {
@@ -1900,47 +2026,80 @@ app.post(
   ),
 
   requireAdminToken,
-  
+  requireSessionAccess,
 
   async (req, res) => {
-  if (currentOperation.status === 'running') {
-    const canInterruptReadiness =
-      currentOperation.type === 'deploy' && currentOperation.phase === 'readiness';
+    const sessionId = req.sessionId;
 
-    if (canInterruptReadiness) {
-      pushLog(
-        'Destruction demandee pendant les tentatives readiness, interruption en cours...',
-        'info'
-      );
-      currentOperation.cancelReadiness = true;
+    if (currentOperation.status === 'running') {
+      const canInterruptReadiness =
+        currentOperation.type === 'deploy' &&
+        currentOperation.phase === 'readiness';
 
-      const released = await waitForOperationToLeaveRunning(30000);
-      if (!released) {
+      if (canInterruptReadiness) {
+        pushLog(
+          'Destruction demandee pendant les tentatives readiness, interruption en cours...',
+          'info'
+        );
+
+        currentOperation.cancelReadiness = true;
+
+        const released =
+          await waitForOperationToLeaveRunning(
+            30000
+          );
+
+        if (!released) {
+          return res.status(409).json({
+            ok: false,
+            error:
+              'Impossible d interrompre le deploy pour le moment. Reessaie dans quelques secondes.'
+          });
+        }
+      } else {
         return res.status(409).json({
           ok: false,
           error:
-            'Impossible d interrompre le deploy pour le moment. Reessaie dans quelques secondes.'
+            `Operation ${currentOperation.type} deja en cours`
         });
       }
-    } else {
-      return res.status(409).json({
+    }
+
+    try {
+      await destroySessionInternal(
+        sessionId,
+        'manual'
+      );
+
+      return res.json({
+        ok: true,
+        sessionId
+      });
+    } catch (error) {
+      currentOperation.status = 'error';
+      currentOperation.phase = 'idle';
+      currentOperation.cancelReadiness = false;
+
+      pushLog(
+        `Erreur destroy: ${error.message}`,
+        'error'
+      );
+
+      const statusCode =
+        error.message === 'Session introuvable.'
+          ? 404
+          : error.message ===
+              'Cette session est deja detruite.'
+            ? 409
+            : 500;
+
+      return res.status(statusCode).json({
         ok: false,
-        error: `Operation ${currentOperation.type} deja en cours`
+        error: error.message
       });
     }
   }
-
-  try {
-    await destroySessionInternal('manual');
-    return res.json({ ok: true });
-  } catch (e) {
-    currentOperation.status = 'error';
-    currentOperation.phase = 'idle';
-    currentOperation.cancelReadiness = false;
-    pushLog(`Erreur destroy: ${e.message}`, 'error');
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
+);
 
 
 /**
@@ -2339,7 +2498,7 @@ proxyApp.use(async (req, res) => {
       return res
         .status(403)
         .send(
-          'Ouverture automatique invalide. Reviens dans TerminIAtor.'
+          'Ouverture automatique invalide. Reviens dans Privalyse.'
         );
     }
 
@@ -2379,5 +2538,26 @@ const proxyServer = proxyApp.listen(PROXY_PORT, () => {
 });
 
 proxyServer.on('upgrade', proxyUpgradeToOpenWebUi);
+const expiredSessionCleanupTimer = setInterval(
+  () => {
+    cleanupExpiredSessions().catch((error) => {
+      pushLog(
+        `Erreur du nettoyage automatique : ${error.message}`,
+        'error'
+      );
+    });
+  },
+  EXPIRED_SESSION_CLEANUP_INTERVAL_MS
+);
+
+expiredSessionCleanupTimer.unref();
+
+cleanupExpiredSessions().catch((error) => {
+  pushLog(
+    `Erreur du nettoyage initial : ${error.message}`,
+    'error'
+  );
+});
+
 
 

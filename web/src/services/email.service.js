@@ -1,4 +1,4 @@
-
+﻿
 const nodemailer = require('nodemailer');
 
 function createTransporter() {
@@ -14,7 +14,7 @@ function createTransporter() {
     !password
   ) {
     throw new Error(
-      'La configuration SMTP est incomplète.'
+      'La configuration SMTP est incomplÃ¨te.'
     );
   }
 
@@ -44,7 +44,7 @@ async function sendPasswordEmail({
     from,
     to,
     subject:
-      'Votre mot de passe TerminIAtor',
+      'Votre mot de passe Privalyse',
     text:
       `Votre nouveau mot de passe est : ${password}`,
   });
@@ -53,3 +53,4 @@ async function sendPasswordEmail({
 module.exports = {
   sendPasswordEmail,
 };
+

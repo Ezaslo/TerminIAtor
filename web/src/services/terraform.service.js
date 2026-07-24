@@ -14,32 +14,11 @@ const config = require('../config/env');
 function buildTerraformEnvironment(
   extraEnvironment = {}
 ) {
-  const terraformEnvironment = {
-    ...process.env,
-  };
-
-  if (
-    process.env.AWS_PROFILE &&
-    !terraformEnvironment.TF_VAR_aws_profile
-  ) {
-    terraformEnvironment.TF_VAR_aws_profile =
-      process.env.AWS_PROFILE;
-  }
-
-  if (
-    process.env.AWS_REGION &&
-    !terraformEnvironment.TF_VAR_aws_region
-  ) {
-    terraformEnvironment.TF_VAR_aws_region =
-      process.env.AWS_REGION;
-  }
-
   return {
-    ...terraformEnvironment,
+    ...process.env,
     ...extraEnvironment,
   };
 }
-
 /**
  * Exécute une commande Terraform.
  *

@@ -478,7 +478,7 @@ function humanizeErrorMessage(errorText) {
   }
 
   if (errorText.includes('Terraform introuvable')) {
-    return 'Terraform est introuvable sur le serveur TerminIAtor.';
+    return 'Terraform est introuvable sur le serveur Privalyse.';
   }
 
   if (errorText.includes('VcpuLimitExceeded')) {
@@ -720,3 +720,4 @@ document.addEventListener('DOMContentLoaded', () => {
   sessionRefreshInterval =
     window.setInterval(refreshSessionSummary, 15000);
 });
+

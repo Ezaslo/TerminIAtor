@@ -399,6 +399,54 @@ async function updateSessionStatus(
  * @param {string} sessionId Identifiant de la session.
  * @returns {Promise<object|null>}
  */
+/**
+ * Retourne les sessions expirées dont l'infrastructure
+ * doit encore être détruite.
+ *
+ * @param {number} limit Nombre maximal de sessions retournées.
+ * @returns {Promise<object[]>}
+ */
+async function listExpiredSessions(limit = 10) {
+  const normalizedLimit =
+    Number.isInteger(limit) && limit > 0
+      ? Math.min(limit, 100)
+      : 10;
+
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        tenant_id,
+        created_by_user_id,
+        name,
+        slug,
+        status,
+        instance_id,
+        elastic_ip,
+        dns_name,
+        access_url,
+        terraform_directory,
+        created_at,
+        updated_at,
+        expires_at,
+        destroyed_at
+      FROM sessions
+      WHERE
+        expires_at IS NOT NULL
+        AND expires_at <= NOW()
+        AND status <> 'destroyed'
+        AND terraform_directory IS NOT NULL
+        AND terraform_directory <> ''
+      ORDER BY expires_at ASC
+      LIMIT $1
+    `,
+    [
+      normalizedLimit,
+    ]
+  );
+
+  return result.rows;
+}
 async function markSessionDestroyed(sessionId) {
   const result = await database.query(
     `
@@ -499,6 +547,7 @@ module.exports = {
   getSessionById,
   canUserAccessSession,
   getSessionSecrets,
+  listExpiredSessions,
   clearSessionState,
   clearSessionSecrets,
   clearAll,
