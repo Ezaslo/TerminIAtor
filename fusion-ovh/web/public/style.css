@@ -1,0 +1,384 @@
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: #0a0e27;
+    background-image: 
+        radial-gradient(at 20% 30%, rgba(0, 242, 254, 0.08) 0px, transparent 50%),
+        radial-gradient(at 80% 70%, rgba(120, 119, 198, 0.08) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(255, 0, 128, 0.04) 0px, transparent 50%);
+    color: #e5e7eb;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+}
+
+.header {
+    margin-bottom: 3rem;
+    text-align: center;
+}
+
+.header h1 {
+    font-size: 3rem;
+    margin: 0 0 0.75rem;
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.header p {
+    margin: 0;
+    color: #9ca3af;
+    font-size: 1.1rem;
+}
+
+/* Model selection */
+.workspace-section,
+.access-section,
+.model-selection,
+.instance-selection,
+.credentials-section {
+    margin-bottom: 2.5rem;
+    padding: 1.25rem 1.25rem 1.35rem;
+    border: 1px solid rgba(100, 200, 255, 0.12);
+    border-radius: 1rem;
+    background: rgba(16, 22, 46, 0.52);
+    backdrop-filter: blur(10px);
+}
+
+.workspace-section h2,
+.access-section h2,
+.model-selection h2,
+.instance-selection h2,
+.credentials-section h2 {
+    font-size: 1.5rem;
+    margin-bottom: 1.25rem;
+    color: #e2e8f0;
+    font-weight: 600;
+    text-align: center;
+}
+
+.workspace-section .helper-text,
+.access-section .helper-text,
+.model-selection .helper-text,
+.instance-selection .helper-text,
+.credentials-section .helper-text {
+    color: #94a3b8;
+    font-size: 0.9rem;
+    margin-bottom: 1.25rem;
+}
+
+.model-group {
+    margin-top: 1.25rem;
+}
+
+.models-grid,
+.instance-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.model-card,
+.instance-card {
+    background: rgba(26, 26, 46, 0.6);
+    backdrop-filter: blur(10px);
+    border-radius: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid rgba(100, 200, 255, 0.15);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.model-card::before,
+.instance-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(0, 242, 254, 0.1), transparent);
+    transition: left 0.5s;
+}
+
+.model-card:hover::before,
+.instance-card:hover::before {
+    left: 100%;
+}
+
+.model-card:hover,
+.instance-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px rgba(0, 242, 254, 0.2);
+    border-color: rgba(0, 242, 254, 0.5);
+}
+
+.model-card.selected,
+.instance-card.selected {
+    border-color: #00f2fe;
+    box-shadow: 0 0 30px rgba(0, 242, 254, 0.3), inset 0 0 20px rgba(0, 242, 254, 0.05);
+    background: rgba(0, 242, 254, 0.08);
+}
+
+.model-card h3,
+.instance-card h4 {
+    margin: 0;
+    color: #e5e7eb;
+}
+
+.model-desc,
+.instance-desc {
+    margin: 0.25rem 0 0.5rem;
+    font-size: 0.85rem;
+    color: #9ca3af;
+}
+
+.model-tag,
+.instance-tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(0, 242, 254, 0.15);
+    color: #7dd3fc;
+    border: 1px solid rgba(0, 242, 254, 0.4);
+}
+
+.model-icon {
+    display: none;
+}
+
+.selected-info {
+    margin-top: 0.25rem;
+    font-size: 0.9rem;
+    color: #cbd5f5;
+}
+
+.status-panel {
+    margin-top: 1rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.9rem;
+    border: 1px solid rgba(100, 200, 255, 0.2);
+    background: rgba(26, 26, 46, 0.6);
+    backdrop-filter: blur(10px);
+    color: #e5e7eb;
+    font-size: 0.94rem;
+    line-height: 1.45;
+}
+
+.status-panel.ready {
+    border-color: #00ff87;
+    background: rgba(0, 255, 135, 0.05);
+}
+
+.status-panel a {
+    color: #7dd3fc;
+    text-decoration: none;
+    word-break: break-word;
+}
+
+.status-panel a:hover {
+    text-decoration: underline;
+}
+
+/* Instance selection */
+
+.instance-selection {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+}
+
+.model-family-title,
+.instance-family-title {
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #00f2fe;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Actions */
+
+.actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+/* Credentials section */
+
+.credentials-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.credential-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.credential-field label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    letter-spacing: 0.02em;
+}
+
+.credential-field input,
+.credential-field select {
+    padding: 0.65rem 0.9rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(100, 200, 255, 0.25);
+    background: rgba(26, 26, 46, 0.7);
+    color: #e5e7eb;
+    font-size: 0.95rem;
+    backdrop-filter: blur(10px);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    outline: none;
+}
+
+.credential-field input::placeholder {
+    color: #64748b;
+}
+
+.credential-field input:focus,
+.credential-field select:focus {
+    border-color: #00f2fe;
+    box-shadow: 0 0 20px rgba(0, 242, 254, 0.2);
+}
+
+.inline-block {
+    margin-top: 1rem;
+}
+
+.primary-btn,
+.secondary-btn {
+    padding: 0.7rem 1.3rem;
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: all 0.3s ease;
+}
+
+.ghost-btn {
+    background: rgba(26, 26, 46, 0.25);
+    color: #7dd3fc;
+    border: 1px solid rgba(0, 242, 254, 0.35);
+    box-shadow: none;
+}
+
+.primary-btn {
+    background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+    color: #0a0e27;
+    font-weight: 600;
+    box-shadow: 0 10px 30px rgba(0, 242, 254, 0.4);
+}
+
+.secondary-btn {
+    background: rgba(26, 26, 46, 0.8);
+    color: #e5e7eb;
+    border: 1px solid rgba(100, 200, 255, 0.3);
+    backdrop-filter: blur(10px);
+}
+
+.primary-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 15px 40px rgba(0, 242, 254, 0.6);
+}
+
+.secondary-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    border-color: rgba(0, 242, 254, 0.6);
+    box-shadow: 0 10px 30px rgba(0, 242, 254, 0.2);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Logs console */
+
+.logs-section {
+    margin-top: 1rem;
+}
+
+.ghost-btn:hover:not(:disabled) {
+    box-shadow: 0 10px 30px rgba(0, 242, 254, 0.2);
+}
+
+.logs-section h2 {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.logs-console {
+    background: rgba(10, 14, 39, 0.8);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(100, 200, 255, 0.2);
+    padding: 0.75rem 1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85rem;
+    max-height: 260px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    backdrop-filter: blur(10px);
+}
+
+.log-line {
+    margin-bottom: 0.25rem;
+}
+
+.log-info {
+    color: #e5e7eb;
+}
+
+.log-terraform {
+    color: #00f2fe;
+}
+
+.log-error {
+    color: #ff006e;
+}
+
+.log-success {
+    color: #00ff87;
+}
+
+/* Small screens */
+
+@media (max-width: 600px) {
+    .app {
+        padding: 1.5rem 1rem 2rem;
+    }
+
+    .header h1 {
+        font-size: 1.6rem;
+    }
+}
