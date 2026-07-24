@@ -1028,15 +1028,87 @@ function rewriteProxyLocation(location, targetBaseUrl, req) {
     return location;
   }
 }
+/**
+ * Extrait l'identifiant de session depuis une URL.
+ *
+ * Format attendu :
+ * /session/<sessionId>/...
+ *
+ * @param {string} requestUrl URL de la requête.
+ * @returns {string|null}
+ */
+function getSessionIdFromRequestUrl(requestUrl) {
+  if (
+    typeof requestUrl !== 'string' ||
+    requestUrl.trim() === ''
+  ) {
+    return null;
+  }
 
-function proxyRequestToOpenWebUi(req, res, jwt) {
-  const targetBaseUrl = getOpenWebUiBaseUrl();
-  if (!targetBaseUrl) {
-    res.status(503).send('Session OpenWebUI indisponible');
+  const pathname =
+    requestUrl.split('?')[0];
+
+  const match = pathname.match(
+    /^\/session\/([^/]+)(?:\/|$)/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function proxyRequestToOpenWebUi(
+  req,
+  res,
+  jwt
+) {
+  const sessionId =
+    getSessionIdFromRequestUrl(
+      req.originalUrl
+    );
+
+  if (!sessionId) {
+    res
+      .status(400)
+      .send('Identifiant de session manquant');
     return;
   }
 
-  const targetUrl = new URL(req.originalUrl, targetBaseUrl);
+  const databaseSession =
+    await sessionRepository.getSessionById(
+      sessionId
+    );
+
+  if (
+    !databaseSession ||
+    !databaseSession.access_url ||
+    databaseSession.status === 'destroyed'
+  ) {
+    res
+      .status(503)
+      .send('Session OpenWebUI indisponible');
+    return;
+  }
+
+  const targetBaseUrl =
+    databaseSession.access_url;
+
+  const proxyPath =
+    req.originalUrl.replace(
+      /^\/session\/[^/]+/,
+      ''
+    ) || '/';
+
+  const targetUrl = new URL(
+    proxyPath,
+    targetBaseUrl
+  );
   const client = targetUrl.protocol === 'https:' ? https : http;
   const headers = { ...req.headers };
   delete headers.host;
@@ -1660,6 +1732,7 @@ pushLog(
         pushLog(`Instance OVH : ${instanceId}`, 'info');
       }
       pushLog(`URL de session : ${accessUrl}`, 'success');
+
             await sessionRepository.updateSessionInfrastructure(
         databaseSession.id,
         {

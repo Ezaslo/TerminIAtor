@@ -301,6 +301,42 @@ async function listSessionsByTenantId(tenantId) {
  * @returns {Promise<object|null>}
  */
 /**
+ * Retourne une session PostgreSQL par son identifiant.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @returns {Promise<object|null>}
+ */
+async function getSessionById(sessionId) {
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        tenant_id,
+        created_by_user_id,
+        name,
+        slug,
+        status,
+        instance_id,
+        elastic_ip,
+        dns_name,
+        access_url,
+        terraform_directory,
+        created_at,
+        updated_at,
+        expires_at,
+        destroyed_at
+      FROM sessions
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [
+      sessionId,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+/**
  * Enregistre les informations d'infrastructure OVH d'une session.
  *
  * @param {string} sessionId Identifiant de la session.
@@ -460,6 +496,7 @@ module.exports = {
   getDraftSessionState,
   updateSessionStatus,
   updateSessionInfrastructure,
+  getSessionById,
   canUserAccessSession,
   getSessionSecrets,
   clearSessionState,
