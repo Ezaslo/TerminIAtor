@@ -31,8 +31,8 @@ locals {
 }
 
 resource "openstack_compute_instance_v2" "ai_host" {
-  name        = "${var.project}-${var.workspace_slug}"
-  flavor_id   = data.openstack_compute_flavor_v2.gpu.id
+  name         = "${var.project}-${var.workspace_slug}"
+  flavor_id    = data.openstack_compute_flavor_v2.gpu.id
   config_drive = true
 
   security_groups = [openstack_networking_secgroup_v2.ai.name]
