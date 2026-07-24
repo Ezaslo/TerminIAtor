@@ -345,7 +345,6 @@ function clearSessionLikeState(target) {
   target.sessionTtlHours = null;
   target.sessionMode = null;
   target.groupId = null;
-  target.analysisType = null;
   target.createdAt = null;
   target.expiresAt = null;
 }
@@ -1479,8 +1478,7 @@ const {
 workspaceName,
 sessionTtlHours,
 sessionMode,
-groupId,
-analysisType
+groupId
 } = req.body;
 
 
@@ -1828,7 +1826,6 @@ pushLog(
       sessionMode === 'team'
         ? groupId.trim()
         : null;
-    draftSessionState.analysisType = analysisType;
     draftSessionState.createdAt = new Date().toISOString();
     draftSessionState.expiresAt = new Date(
       Date.now() + finalSessionTtlHours * 60 * 60 * 1000
@@ -1934,7 +1931,6 @@ sessionState.groupId =
   sessionMode === 'team'
     ? groupId.trim()
     : null;
-sessionState.analysisType = analysisType;
       sessionState.createdAt = new Date().toISOString();
       sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
       sessionSecrets.adminEmail = finalOwuiEmail;

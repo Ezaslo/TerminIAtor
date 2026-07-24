@@ -93,12 +93,7 @@ const ALLOWED_SESSION_MODES = new Set([
   'team'
 ]);
 
-const ALLOWED_ANALYSIS_TYPES = new Set([
-  'summary',
-  'sensitive-clauses',
-  'comparison',
-  'questions'
-]);
+
 
 function validateDeployment(req, res, next) {
   const workspaceName =
@@ -111,10 +106,7 @@ function validateDeployment(req, res, next) {
       ? req.body.sessionMode.trim().toLowerCase()
       : '';
 
-  const analysisType =
-    typeof req.body?.analysisType === 'string'
-      ? req.body.analysisType.trim().toLowerCase()
-      : '';
+  
 
   const groupId =
     typeof req.body?.groupId === 'string'
@@ -142,12 +134,7 @@ function validateDeployment(req, res, next) {
     });
   }
 
-  if (!ALLOWED_ANALYSIS_TYPES.has(analysisType)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Le type d'analyse est invalide."
-    });
-  }
+  
 
   if (
     !Number.isInteger(sessionTtlHours) ||
@@ -171,7 +158,6 @@ function validateDeployment(req, res, next) {
 
   req.body.workspaceName = workspaceName;
   req.body.sessionMode = sessionMode;
-  req.body.analysisType = analysisType;
   req.body.sessionTtlHours = sessionTtlHours;
   req.body.groupId = groupId;
 

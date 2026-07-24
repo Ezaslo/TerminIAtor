@@ -23,10 +23,7 @@ function getSelectedMode() {
   return document.querySelector('input[name="sessionMode"]:checked')?.value || 'individual';
 }
 
-function getAnalysisLabel() {
-  const analysisSelect = document.getElementById('analysisType');
-  return analysisSelect?.selectedOptions[0]?.textContent.trim() || 'Synthèse du contrat';
-}
+
 
 function getDurationLabel() {
   const durationSelect = document.getElementById('sessionTtlHours');
@@ -221,13 +218,11 @@ async function loadAvailableGroups() {
 function setupFormInteractions() {
   const workspaceName = document.getElementById('workspaceName');
   const duration = document.getElementById('sessionTtlHours');
-  const analysisType = document.getElementById('analysisType');
   const groupId = document.getElementById('groupId');
   const modeInputs = document.querySelectorAll('input[name="sessionMode"]');
 
   workspaceName?.addEventListener('input', updateSummaryPreview);
   duration?.addEventListener('change', updateSummaryPreview);
-  analysisType?.addEventListener('change', updateSummaryPreview);
   groupId?.addEventListener('change', updateSummaryPreview);
 
   modeInputs.forEach((input) => {
@@ -399,9 +394,6 @@ function renderSessionSummary(
     displayedSession?.mode ||
     'individual';
 
-  const analysisType =
-    displayedSession?.analysisType ||
-    'summary';
 
   const expiresAt =
     displayedSession?.expiresAt ||
@@ -432,11 +424,8 @@ function renderSessionSummary(
   summary.innerHTML =
     `<strong>${escapeHtml(statusLabel)}</strong><br />` +
     `Nom : ${escapeHtml(workspaceName)}<br />` +
-    `Mode : ${sessionMode === 'team' ? 'Équipe' : 'Individuel'}<br />` +
-    `Analyse : ${escapeHtml(
-      analysisLabels[analysisType] || analysisType
-    )}<br />` +
-    `Expiration : ${escapeHtml(formatDateTime(expiresAt))}` +
+   `Mode : ${sessionMode === 'team' ? 'Équipe' : 'Individuel'}<br />` +
+   `Expiration : ${escapeHtml(formatDateTime(expiresAt))}` +
     (accessUrl && status === 'ready'
       ? `<br />Accès : <a href="${escapeHtml(accessUrl)}" target="_blank" rel="noopener noreferrer">Ouvrir l’espace</a>`
       : '');
