@@ -119,41 +119,79 @@ async function requestJson(url, { method = 'GET', body } = {}) {
   return data;
 }
 
-function createResetButton(user) {
+let openPasswordResetPanelElement = null;
+let openPasswordResetButtonElement = null;
+
+function closePasswordResetPanel() {
+  if (openPasswordResetPanelElement) openPasswordResetPanelElement.remove();
+  if (openPasswordResetButtonElement) openPasswordResetButtonElement.classList.remove('reset-button--active');
+  openPasswordResetPanelElement = null;
+  openPasswordResetButtonElement = null;
+}
+
+function createPasswordResetPanel(user) {
+  const row = document.createElement('tr');
+  row.className = 'password-reset-row';
+  const cell = document.createElement('td');
+  cell.colSpan = 4;
+  const panel = document.createElement('div');
+  panel.className = 'password-reset-panel';
+  const header = document.createElement('div');
+  header.className = 'password-reset-header';
+  const title = document.createElement('h3');
+  title.textContent = 'Réinitialiser le mot de passe';
+  const target = document.createElement('p');
+  target.className = 'password-reset-target';
+  target.textContent = `Définissez un nouveau mot de passe pour ${user.email}.`;
+  header.append(title, target);
+  const grid = document.createElement('div');
+  grid.className = 'password-reset-grid';
+  const fields = [];
+  ['Nouveau mot de passe', 'Confirmer le mot de passe'].forEach((labelText, index) => {
+    const field = document.createElement('div'); field.className = 'password-reset-field';
+    const label = document.createElement('label'); label.textContent = labelText;
+    const input = document.createElement('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.minLength = 12; input.maxLength = 200; input.required = true;
+    if (index === 0) input.id = `password-reset-${user.id}`; else input.id = `password-reset-confirm-${user.id}`;
+    label.htmlFor = input.id; field.append(label, input); grid.appendChild(field); fields.push(input);
+  });
+  const actions = document.createElement('div'); actions.className = 'password-reset-actions';
+  const save = document.createElement('button'); save.type = 'button'; save.className = 'primary-button'; save.textContent = 'Enregistrer le nouveau mot de passe';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-secondary'; cancel.textContent = 'Annuler';
+  const message = document.createElement('p'); message.className = 'password-reset-message'; message.setAttribute('aria-live', 'polite');
+  cancel.addEventListener('click', () => {
+    fields.forEach((input) => { input.value = ''; });
+    message.textContent = '';
+    closePasswordResetPanel();
+  });
+  save.addEventListener('click', async () => {
+    const [newPassword, confirmPassword] = fields.map((input) => input.value);
+    if (!newPassword || !confirmPassword || newPassword.length < 12 || newPassword.length > 200 || newPassword !== confirmPassword) { message.textContent = 'Le nouveau mot de passe est invalide.'; message.className = 'password-reset-message password-reset-message--error'; return; }
+    save.disabled = true;
+    try {
+      const data = await requestJson(`/api/admin/users/${encodeURIComponent(user.id)}/password`, { method: 'PATCH', body: { newPassword, confirmPassword } });
+      fields.forEach((input) => { input.value = ''; });
+      message.textContent = data.message || 'Le mot de passe a été réinitialisé.';
+      message.className = 'password-reset-message password-reset-message--success';
+      setTimeout(closePasswordResetPanel, 800);
+    } catch (error) { message.textContent = error.message; message.className = 'password-reset-message password-reset-message--error'; } finally { save.disabled = false; }
+  });
+  actions.append(save, cancel); panel.append(header, grid, actions, message); cell.appendChild(panel); row.appendChild(cell); return row;
+}
+
+function createResetButton(user, row) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'action-button reset-button';
   button.textContent = 'Réinitialiser';
 
-  button.addEventListener('click', async () => {
-    const password = window.prompt(`Nouveau mot de passe pour ${user.email} :`);
-    if (password === null) return;
-
-    if (!password) {
-      displayPageMessage('Le nouveau mot de passe est obligatoire.', 'error');
-      return;
-    }
-
-    button.disabled = true;
-    button.textContent = 'Envoi…';
-    displayPageMessage('');
-
-    try {
-      const data = await requestJson(
-        `/api/admin/users/${encodeURIComponent(user.id)}/password`,
-        { method: 'PATCH', body: { password } }
-      );
-
-      displayPageMessage(
-        data.message || 'Mot de passe réinitialisé avec succès.',
-        'success'
-      );
-    } catch (error) {
-      displayPageMessage(error.message, 'error');
-    } finally {
-      button.disabled = false;
-      button.textContent = 'Réinitialiser';
-    }
+  button.addEventListener('click', () => {
+    closePasswordResetPanel();
+    document.querySelectorAll('.reset-button--active').forEach((activeButton) => activeButton.classList.remove('reset-button--active'));
+    const panel = createPasswordResetPanel(user);
+    row.after(panel);
+    openPasswordResetPanelElement = panel;
+    openPasswordResetButtonElement = button;
+    button.classList.add('reset-button--active');
   });
 
   return button;
@@ -225,7 +263,7 @@ function displayUsers(data) {
 
     const actionsCell = document.createElement('td');
     actionsCell.className = 'actions-cell';
-    actionsCell.append(createResetButton(user), createDeleteUserButton(user));
+    actionsCell.append(createResetButton(user, row), createDeleteUserButton(user));
     row.appendChild(actionsCell);
     usersTableBody.appendChild(row);
   });

@@ -406,6 +406,23 @@
     .reset-button:hover {
       background: var(--primary-hover);
     }
+    .reset-button--active { box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25); }
+    .password-reset-row td { padding: 0 12px 16px; border-bottom: 1px solid var(--border); }
+    .password-reset-panel { max-width: 760px; margin: 0 auto; padding: 20px 24px; border: 1px solid rgba(56, 189, 248, 0.45); border-radius: 12px; background: rgba(15, 23, 42, 0.8); }
+    .password-reset-header h3 { margin: 0; }
+    .password-reset-target { margin: 6px 0 18px; color: var(--text-muted); overflow-wrap: anywhere; }
+    .password-reset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .password-reset-field { display: grid; gap: 7px; }
+    .password-reset-actions { display: flex; gap: 10px; margin-top: 18px; }
+    .password-reset-actions button { flex: 0 1 auto; }
+    .password-reset-message { min-height: 22px; margin: 12px 0 0; }
+    .password-reset-message--success { color: #86efac; }
+    .password-reset-message--error { color: #fca5a5; }
+    .btn-secondary { min-height: 42px; padding: 0 20px; border: 1px solid #52627a; border-radius: 10px; background: #1a2639; color: #e7edf7; font-weight: 700; cursor: pointer; transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease; }
+    .btn-secondary:hover { background: #24344d; border-color: #6f86a8; }
+    .btn-secondary:active { transform: translateY(1px); }
+    .btn-secondary:focus-visible { outline: 3px solid rgba(14, 165, 233, 0.35); outline-offset: 2px; }
+    .password-reset-panel input:focus-visible, .password-reset-panel button:focus-visible { outline: 3px solid rgba(56, 189, 248, 0.65); outline-offset: 2px; }
 
     .delete-button {
       background: var(--danger);
@@ -455,8 +472,6 @@
     .mfa-disable { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
     .mfa-disable h3 { margin: 0 0 8px; }
     .mfa-disable-warning { color: #fbbf24; }
-    .btn-secondary { background: #475569; }
-    .btn-secondary:hover { background: #64748b; }
     .btn-danger { background: #991b1b; }
     .btn-danger:hover { background: #b91c1c; }
     #mfa-panel input:focus-visible, #mfa-panel button:focus-visible { outline: 3px solid rgba(56, 189, 248, 0.65); outline-offset: 2px; }
@@ -562,9 +577,12 @@
       .invitation-form,
       .group-form,
       .member-form,
-      .password-form {
+      .password-form,
+      .password-reset-grid {
         grid-template-columns: 1fr;
       }
+      .password-reset-actions { flex-direction: column; }
+      .password-reset-actions button { width: 100%; }
 
       #password-submit {
         margin-top: 0;

@@ -74,6 +74,8 @@ router.patch(
     'admin'
   ),
 
+  validationMiddleware.validateAdminPasswordReset,
+
   adminController.resetUserPassword
 );
 module.exports = router;

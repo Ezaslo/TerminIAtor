@@ -202,6 +202,17 @@ function validatePasswordChange(req, res, next) {
   return next();
 }
 
+function validateAdminPasswordReset(req, res, next) {
+  const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+  const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
+  if (!newPassword || !confirmPassword || Buffer.byteLength(newPassword, 'utf8') > 1024 || Buffer.byteLength(confirmPassword, 'utf8') > 1024 || newPassword.length < 12 || newPassword.length > 200 || newPassword !== confirmPassword) {
+    return res.status(400).json({ error: 'Le nouveau mot de passe est invalide.' });
+  }
+  req.body.newPassword = newPassword;
+  req.body.confirmPassword = confirmPassword;
+  return next();
+}
+
 function validateMfaCode(req, res, next) {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
   if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Code MFA invalide.' });
@@ -230,6 +241,7 @@ module.exports = {
   validateInvitationAcceptance,
   validateDeployment,
   validatePasswordChange,
+  validateAdminPasswordReset,
   validateMfaCode,
   validateMfaChallenge,
   validateRecoveryLogin,

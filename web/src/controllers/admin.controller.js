@@ -1,7 +1,3 @@
-const emailService = require(
-  '../services/email.service'
-);
-
 const userRepository = require(
   '../repositories/user.repository'
 );
@@ -12,6 +8,7 @@ const invitationRepository = require(
 const passwordService = require(
   '../services/password.service'
 );
+const authSessionRepository = require('../repositories/auth-session.repository');
 
 const invitationService = require(
   '../services/invitation.service'
@@ -298,9 +295,9 @@ async function resetUserPassword(
         : '';
 
     const password =
-      typeof request.body?.password ===
+      typeof request.body?.newPassword ===
       'string'
-        ? request.body.password
+        ? request.body.newPassword
         : '';
 
     if (!userId) {
@@ -317,16 +314,18 @@ async function resetUserPassword(
       });
     }
 
+    const targetUser = await userRepository.findUserById(userId);
+    if (!targetUser) return response.status(404).json({ error: 'Utilisateur introuvable.' });
+    if (targetUser.tenant_id !== request.auth.tenantId) return response.status(403).json({ error: 'Accès refusé.' });
+
     const passwordHash =
       await passwordService
         .hashPassword(password);
 
     const updatedUser =
       await userRepository
-        .updateUserPassword({
+        .updatePasswordHashById({
           userId,
-          tenantId:
-            request.auth.tenantId,
           passwordHash,
         });
 
@@ -336,10 +335,7 @@ async function resetUserPassword(
           'Utilisateur introuvable.',
       });
     }
-    await emailService.sendPasswordEmail({
-  to: updatedUser.email,
-  password,
-});
+    await authSessionRepository.revokeAllAuthSessionsByUserId({ userId });
 
     return response.status(200).json({
       message:
