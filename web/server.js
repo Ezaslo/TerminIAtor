@@ -1198,13 +1198,50 @@ async function proxyUpgradeToOpenWebUi(
     socket.destroy();
     return;
   }
-  const targetBaseUrl = getOpenWebUiBaseUrl();
-  if (!targetBaseUrl) {
+  const sessionId =
+    getSessionIdFromRequestUrl(
+      req.url
+    );
+
+  if (!sessionId) {
     socket.destroy();
     return;
   }
 
-  const targetUrl = new URL(req.url, targetBaseUrl);
+  let databaseSession;
+
+  try {
+    databaseSession =
+      await sessionRepository.getSessionById(
+        sessionId
+      );
+  } catch (_) {
+    socket.destroy();
+    return;
+  }
+
+  if (
+    !databaseSession ||
+    !databaseSession.access_url ||
+    databaseSession.status === 'destroyed'
+  ) {
+    socket.destroy();
+    return;
+  }
+
+  const targetBaseUrl =
+    databaseSession.access_url;
+
+  const proxyPath =
+    req.url.replace(
+      /^\/session\/[^/]+/,
+      ''
+    ) || '/';
+
+  const targetUrl = new URL(
+    proxyPath,
+    targetBaseUrl
+  );
   const client = targetUrl.protocol === 'https:' ? https : http;
   const headers = { ...req.headers };
   headers.host = targetUrl.host;
