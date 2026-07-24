@@ -89,24 +89,37 @@ async function migrate() {
       `Application de la migration : ${fileName}`
     );
 
-  const statements = sql
-  .split(';')
-  .map((statement) => statement.trim())
-  .filter(Boolean);
+    const statements = sql
+      .split(';')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
 
-for (const statement of statements) {
-  await database.query(statement);
-}
+    const client = await database.getClient();
 
-    await database.query(
-      `
-        INSERT INTO schema_migrations (
-          name
-        )
-        VALUES ($1)
-      `,
-      [fileName]
-    );
+    try {
+      await client.query('BEGIN');
+
+      for (const statement of statements) {
+        await client.query(statement);
+      }
+
+      await client.query(
+        `
+          INSERT INTO schema_migrations (
+            name
+          )
+          VALUES ($1)
+        `,
+        [fileName]
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     console.log(
       `Migration appliquée : ${fileName}`

@@ -94,9 +94,20 @@ async function close() {
   await pool.end();
   pool = null;
 }
+/**
+ * Retourne un client PostgreSQL dédié.
+ *
+ * Le client doit être libéré avec client.release().
+ *
+ * @returns {Promise<import('pg').PoolClient>}
+ */
+function getClient() {
+  return getPool().connect();
+}
 
 module.exports = {
   getPool,
+  getClient,
   query,
   testConnection,
   close,
