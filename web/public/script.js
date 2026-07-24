@@ -702,3 +702,4 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setInterval(refreshSessionSummary, 15000);
 });
 
+
