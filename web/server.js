@@ -28,9 +28,6 @@ const sessionRepository = require(
 const terraformService = require(
   './src/services/terraform.service'
 );
-const awsService = require(
-  './src/services/aws.service'
-);
 const authRoutes = require(
   './src/routes/auth.routes'
 );
@@ -101,7 +98,7 @@ app.use(cors({
 
     callback(new Error('Origine non autorisee par CORS'));
   },
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type']
 }));
 app.use(bodyParser.json({ limit: '32kb' }));
@@ -197,21 +194,16 @@ const AI_PULL_MAP = {
 
 const AUTH_MODES = new Set(['local_admin', 'trusted_header']);
 
+const DEFAULT_GPU_FLAVOR =
+  process.env.OVH_GPU_FLAVOR || 'gpu-rtx5000';
+
 const INSTANCE_TYPES = new Set([
-  't3.small',
-  't3.medium',
-  't3.large',
-  't3.xlarge',
-  't3.2xlarge',
-  'g4dn.xlarge',
-  'g4dn.2xlarge',
-  'g4dn.4xlarge',
-  'g4dn.8xlarge'
+  DEFAULT_GPU_FLAVOR
 ]);
 const DEFAULT_DEPLOYMENT_CONFIG = Object.freeze({
   aiChoice: 'qwen-7b',
-  individualInstanceType: 'g4dn.xlarge',
-  teamInstanceType: 'g4dn.xlarge',
+  individualInstanceType: DEFAULT_GPU_FLAVOR,
+  teamInstanceType: DEFAULT_GPU_FLAVOR,
   allowedCidr:
     process.env.TF_VAR_allowed_cidr || '127.0.0.1/32',
   authMode: 'local_admin',
@@ -225,21 +217,6 @@ const DEFAULT_DEPLOYMENT_CONFIG = Object.freeze({
     process.env.TERMINIATOR_OWUI_EMAIL ||
     'admin@terminiator.local'
 });
-const INFRA_DESTROY_TARGETS = [
-  'aws_instance.ai_host',
-  'aws_security_group.ec2_min',
-  'aws_iam_role_policy.tag_self',
-  'aws_iam_instance_profile.ssm_profile',
-  'aws_iam_role_policy_attachment.ssm_core',
-  'aws_iam_role_policy_attachment.cw_agent',
-  'aws_iam_role.ssm_role',
-  'aws_route_table_association.public_a',
-  'aws_route.public_internet_access',
-  'aws_route_table.public',
-  'aws_internet_gateway.igw',
-  'aws_subnet.public_a',
-  'aws_vpc.main'
-];
 
 function requireAdminToken(req, res, next) {
   if (!ADMIN_TOKEN_ENABLED) {
@@ -496,8 +473,7 @@ async function destroyInfraInternal(reason = 'manual') {
     await runTerraform(
       [
         'destroy',
-        '-auto-approve',
-        ...INFRA_DESTROY_TARGETS.flatMap((target) => ['-target', target])
+        '-auto-approve'
       ],
       {
         TF_VAR_allowed_cidr: process.env.TF_VAR_allowed_cidr || '127.0.0.1/32',
@@ -768,18 +744,6 @@ function checkHttpStatus(url, acceptedStatuses = [200]) {
 function terraformOutputRaw(name) {
   return terraformService.outputRaw(
     name,
-    {
-      cwd: TERRAFORM_DIR,
-    }
-  );
-}
-function readEc2Tag(
-  instanceId,
-  key
-) {
-  return awsService.readEc2Tag(
-    instanceId,
-    key,
     {
       cwd: TERRAFORM_DIR,
     }
@@ -1106,7 +1070,7 @@ async function proxyUpgradeToOpenWebUi(
 }
 
 function getReadinessBudget(instanceType) {
-  const isGpuInstance = /^(g|p)\d/i.test(instanceType || '');
+  const isGpuInstance = Boolean(instanceType);
 
   if (isGpuInstance) {
     // GPU: le premier chargement peut prendre plusieurs minutes.
@@ -1117,7 +1081,7 @@ function getReadinessBudget(instanceType) {
   return { maxAttempts: 360, delayMs: 5000 }; // 30 min
 }
 
-async function waitForIaReady(ip, instanceType, expectedModel = null, instanceId = null) {
+async function waitForIaReady(ip, instanceType, expectedModel = null) {
   const openWebUiUrl = `http://${ip}:3000/`;
 
   const { maxAttempts, delayMs } = getReadinessBudget(instanceType);
@@ -1136,20 +1100,10 @@ async function waitForIaReady(ip, instanceType, expectedModel = null, instanceId
 
     try {
       await checkHttpStatus(openWebUiUrl, [200, 301, 302, 307, 308]);
-      if (instanceId) {
-        const readyTag = readEc2Tag(instanceId, 'AI');
-        if (readyTag !== 'ready') {
-          pushLog(`OpenWebUI repond, cloud-init encore en cours (tentative ${attempt}/${maxAttempts})`, 'info');
-          throw new Error('cloud-init-not-ready');
-        }
-      }
-
       pushLog(`OpenWebUI et cloud-init prets sur ${openWebUiUrl}`, 'ia-ready');
       return { ready: true, url: openWebUiUrl, cancelled: false };
     } catch (e) {
-      if (e.message !== 'cloud-init-not-ready') {
-        pushLog(`IA pas encore prete (tentative ${attempt}/${maxAttempts})`, 'info');
-      }
+      pushLog(`IA pas encore prete (tentative ${attempt}/${maxAttempts})`, 'info');
 
       const sliceMs = 500;
       for (let waited = 0; waited < delayMs; waited += sliceMs) {
@@ -1551,8 +1505,8 @@ pushLog(
       TF_VAR_webui_secret_key: finalWebuiSecretKey
     });
 
-    const ipOutput = terraformOutputRaw('ec2_public_ip');
-    const instanceIdOutput = terraformOutputRaw('ec2_instance_id');
+    const ipOutput = terraformOutputRaw('instance_public_ip');
+    const instanceIdOutput = terraformOutputRaw('instance_id');
     const accessUrlOutput = terraformOutputRaw('workspace_access_url');
 
     if (ipOutput.status === 0) {
@@ -1567,7 +1521,7 @@ pushLog(
           : `http://${ip}:3000`;
       pushLog(`IP publique session : ${ip}`, 'info');
       if (instanceId) {
-        pushLog(`Instance AWS : ${instanceId}`, 'info');
+        pushLog(`Instance OVH : ${instanceId}`, 'info');
       }
       pushLog(`URL de session : ${accessUrl}`, 'success');
 
@@ -1599,7 +1553,7 @@ sessionState.analysisType = analysisType;
       persistState();
 
       currentOperation.phase = 'readiness';
-      const readiness = await waitForIaReady(ip, finalInstanceType, expectedModel, instanceId);
+      const readiness = await waitForIaReady(ip, finalInstanceType, expectedModel);
       if (readiness.cancelled) {
         currentOperation.type = 'idle';
         currentOperation.status = 'idle';
@@ -1632,7 +1586,7 @@ sessionState.analysisType = analysisType;
         
       }
     } else {
-      pushLog('Impossible de recuperer ec2_public_ip', 'error');
+      pushLog('Impossible de recuperer instance_public_ip', 'error');
     }
 
     currentOperation.status = 'success';
@@ -1653,10 +1607,9 @@ sessionState.analysisType = analysisType;
     currentOperation.phase = 'idle';
     currentOperation.cancelReadiness = false;
     const message = String(e && e.message ? e.message : e);
-    if (message.includes('VcpuLimitExceeded')) {
+    if (/quota|limit exceeded/i.test(message)) {
       const quotaHelp =
-        'Quota AWS vCPU insuffisant pour cette instance. ' +
-        'Utilise g4dn.xlarge (4 vCPU) ou demande une augmentation de quota EC2 vCPU.';
+        'Quota OVH Public Cloud insuffisant ou flavor GPU indisponible dans la region choisie.';
       pushLog(quotaHelp, 'error');
       pushLog(`Erreur deploy: ${message}`, 'error');
       return res.status(409).json({ ok: false, error: quotaHelp });
@@ -1719,306 +1672,6 @@ app.post(
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-
-/**
- * Validation légère des identifiants UUID reçus dans les routes groupes.
- */
-function isUuid(value) {
-  return typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-/**
- * Liste les groupes accessibles dans l'organisation courante.
- * Cette route est utilisée par la page de création d'une session d'équipe.
- */
-app.get(
-  '/api/groups',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  async (req, res) => {
-    try {
-     const groups =
-     await groupRepository.listGroupsByUserId(
-    req.auth.tenantId,
-    req.auth.userId
-  );
-      return res.json({
-        ok: true,
-        count: groups.length,
-        groups,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible de charger les groupes : ${error.message}`,
-      });
-    }
-  }
-);
-
-/**
- * Liste tous les groupes du tenant pour l'administration.
- */
-app.get(
-  '/api/admin/groups',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  authMiddleware.requireRole('owner', 'admin'),
-  async (req, res) => {
-    try {
-      const groups = await groupRepository.listGroupsByTenantId(
-        req.auth.tenantId
-      );
-
-      return res.json({
-        ok: true,
-        count: groups.length,
-        groups,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible de charger les groupes : ${error.message}`,
-      });
-    }
-  }
-);
-
-/**
- * Crée un groupe dans le tenant de l'administrateur connecté.
- */
-app.post(
-  '/api/admin/groups',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  authMiddleware.requireRole('owner', 'admin'),
-  async (req, res) => {
-    try {
-      const name = typeof req.body?.name === 'string'
-        ? req.body.name.trim()
-        : '';
-
-      if (name.length < 2 || name.length > 100) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Le nom du groupe doit contenir entre 2 et 100 caractères.',
-        });
-      }
-
-      const existingGroups = await groupRepository.listGroupsByTenantId(
-        req.auth.tenantId
-      );
-
-      const duplicate = existingGroups.some(
-        (group) => group.name.trim().toLowerCase() === name.toLowerCase()
-      );
-
-      if (duplicate) {
-        return res.status(409).json({
-          ok: false,
-          error: 'Un groupe portant ce nom existe déjà.',
-        });
-      }
-
-      const group = await groupRepository.createGroup({
-        tenantId: req.auth.tenantId,
-        name,
-        createdBy: req.auth.userId,
-      });
-
-      if (!group) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Impossible de créer le groupe.',
-        });
-      }
-
-      return res.status(201).json({
-        ok: true,
-        message: 'Groupe créé avec succès.',
-        group: {
-          ...group,
-          members: [],
-        },
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible de créer le groupe : ${error.message}`,
-      });
-    }
-  }
-);
-
-/**
- * Ajoute un utilisateur au groupe, avec une limite MVP de trois membres.
- */
-app.post(
-  '/api/admin/groups/:groupId/members',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  authMiddleware.requireRole('owner', 'admin'),
-  async (req, res) => {
-    try {
-      const { groupId } = req.params;
-      const userId = req.body?.userId;
-
-      if (!isUuid(groupId) || !isUuid(userId)) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Identifiant de groupe ou d’utilisateur invalide.',
-        });
-      }
-
-      const group = await groupRepository.findGroupById(
-        groupId,
-        req.auth.tenantId
-      );
-
-      if (!group) {
-        return res.status(404).json({
-          ok: false,
-          error: 'Groupe introuvable.',
-        });
-      }
-
-      const members = await groupRepository.listGroupMembers(
-        groupId,
-        req.auth.tenantId
-      );
-
-      if (members.some((member) => member.id === userId)) {
-        return res.status(409).json({
-          ok: false,
-          error: 'Cet utilisateur appartient déjà au groupe.',
-        });
-      }
-
-      if (members.length >= 3) {
-        return res.status(409).json({
-          ok: false,
-          error: 'Un groupe ne peut pas contenir plus de 3 membres.',
-        });
-      }
-
-      const membership = await groupRepository.addGroupMember({
-        groupId,
-        userId,
-        tenantId: req.auth.tenantId,
-      });
-
-      if (!membership) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Utilisateur introuvable dans cette organisation.',
-        });
-      }
-
-      return res.status(201).json({
-        ok: true,
-        message: 'Membre ajouté au groupe.',
-        membership,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible d’ajouter le membre : ${error.message}`,
-      });
-    }
-  }
-);
-
-/**
- * Retire un utilisateur d'un groupe.
- */
-app.delete(
-  '/api/admin/groups/:groupId/members/:userId',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  authMiddleware.requireRole('owner', 'admin'),
-  async (req, res) => {
-    try {
-      const { groupId, userId } = req.params;
-
-      if (!isUuid(groupId) || !isUuid(userId)) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Identifiant de groupe ou d’utilisateur invalide.',
-        });
-      }
-
-      const removed = await groupRepository.removeGroupMember({
-        groupId,
-        userId,
-        tenantId: req.auth.tenantId,
-      });
-
-      if (!removed) {
-        return res.status(404).json({
-          ok: false,
-          error: 'Membre ou groupe introuvable.',
-        });
-      }
-
-      return res.json({
-        ok: true,
-        message: 'Membre retiré du groupe.',
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible de retirer le membre : ${error.message}`,
-      });
-    }
-  }
-);
-
-/**
- * Supprime un groupe et ses appartenances.
- */
-app.delete(
-  '/api/admin/groups/:groupId',
-  authMiddleware.authenticate,
-  authMiddleware.requireAuthentication,
-  authMiddleware.requireRole('owner', 'admin'),
-  async (req, res) => {
-    try {
-      const { groupId } = req.params;
-
-      if (!isUuid(groupId)) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Identifiant de groupe invalide.',
-        });
-      }
-
-      const deleted = await groupRepository.deleteGroupByIdAndTenantId({
-        groupId,
-        tenantId: req.auth.tenantId,
-      });
-
-      if (!deleted) {
-        return res.status(404).json({
-          ok: false,
-          error: 'Groupe introuvable.',
-        });
-      }
-
-      return res.json({
-        ok: true,
-        message: 'Groupe supprimé avec succès.',
-        group: deleted,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: `Impossible de supprimer le groupe : ${error.message}`,
-      });
-    }
-  }
-);
 
 restorePersistedSession();
 

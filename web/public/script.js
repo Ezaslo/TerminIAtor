@@ -3,6 +3,8 @@ let isDestroying = false;
 let eventSource = null;
 let sessionRefreshInterval = null;
 let lastSubmittedSession = null;
+let activeDatabaseSessionId = null;
+
 
 function authHeaders() {
   return {
@@ -361,6 +363,11 @@ function renderSessionSummary(
 
   const fallback = draftSession || lastSubmittedSession;
   const activeSession = session?.active ? session : null;
+
+  activeDatabaseSessionId =
+    activeSession?.databaseSessionId ||
+    null;
+
   const displayedSession = activeSession || fallback;
   const isRunning = operation.status === 'running';
 
@@ -658,9 +665,18 @@ function setupOpenSessionButton() {
     openSessionBtn.textContent = 'Ouverture...';
 
     try {
+      if (!activeDatabaseSessionId) {
+        throw new Error(
+          'Identifiant de session indisponible.'
+        );
+      }
+
       const response = await fetch('/api/session/open', {
         method: 'POST',
-        headers: authHeaders()
+        headers: authHeaders(),
+        body: JSON.stringify({
+          sessionId: activeDatabaseSessionId
+        })
       });
 
       if (!response.ok) {
