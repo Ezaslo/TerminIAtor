@@ -113,7 +113,7 @@ const terraformDirectory = path.resolve(
   __dirname,
   '..',
   '..',
-  '..'
+  'terraform'
 );
 
 // Token optionnel protégeant les routes d'administration.
