@@ -59,9 +59,10 @@ function runTerraform(
       config.terraform.binary;
 
     const workingDirectory =
-      options.cwd ||
-      config.terraform.directory;
-
+     options.workingDirectory ||
+     options.cwd ||
+     config.terraform.directory;
+ 
     const extraEnvironment =
       options.extraEnvironment || {};
 
@@ -170,8 +171,8 @@ function outputRaw(
     config.terraform.binary;
 
   const workingDirectory =
-    options.cwd ||
-    config.terraform.directory;
+  options.cwd ||
+  config.terraform.directory;
 
   if (!terraformBinary) {
     return {

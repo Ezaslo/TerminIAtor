@@ -692,14 +692,118 @@ app.get(
     });
   }
 });
- function runTerraform(
+function getSessionTerraformDirectory(sessionId) {
+  const normalizedSessionId =
+    String(sessionId || '').trim();
+
+  if (
+    !normalizedSessionId ||
+    !/^[a-zA-Z0-9_-]+$/.test(normalizedSessionId)
+  ) {
+    throw new Error(
+      'Identifiant de session invalide pour Terraform'
+    );
+  }
+
+  const sessionsRootDirectory = path.join(
+    __dirname,
+    'terraform-sessions'
+  );
+
+  return path.join(
+    sessionsRootDirectory,
+    normalizedSessionId
+  );
+}
+
+/**
+ * Copie les sources Terraform dans le dossier isolé d'une session.
+ * Les états et caches d'une autre exécution ne sont jamais recopiés.
+ */
+function prepareSessionTerraformDirectory(sessionId) {
+  const sessionDirectory =
+    getSessionTerraformDirectory(sessionId);
+
+  const excludedNames = new Set([
+    '.terraform',
+    '.terraform.lock.hcl',
+    'terraform.tfstate',
+    'terraform.tfstate.backup',
+    'terraform.tfvars',
+  ]);
+
+  fs.rmSync(sessionDirectory, {
+    recursive: true,
+    force: true,
+  });
+
+  fs.mkdirSync(sessionDirectory, {
+    recursive: true,
+  });
+
+  function copyDirectory(sourceDirectory, targetDirectory) {
+    for (
+      const entry of fs.readdirSync(
+        sourceDirectory,
+        { withFileTypes: true }
+      )
+    ) {
+      if (
+        excludedNames.has(entry.name) ||
+        entry.name.startsWith('terraform.tfstate.')
+      ) {
+        continue;
+      }
+
+      const sourcePath = path.join(
+        sourceDirectory,
+        entry.name
+      );
+
+      const targetPath = path.join(
+        targetDirectory,
+        entry.name
+      );
+
+      if (entry.isDirectory()) {
+        fs.mkdirSync(targetPath, {
+          recursive: true,
+        });
+
+        copyDirectory(
+          sourcePath,
+          targetPath
+        );
+
+        continue;
+      }
+
+      if (entry.isFile()) {
+        fs.copyFileSync(
+          sourcePath,
+          targetPath
+        );
+      }
+    }
+  }
+
+  copyDirectory(
+    TERRAFORM_DIR,
+    sessionDirectory
+  );
+
+  return sessionDirectory;
+}
+
+function runTerraform(
   argumentsList,
-  extraEnvironment = {}
+  extraEnvironment = {},
+  workingDirectory = TERRAFORM_DIR
 ) {
   return terraformService.runTerraform(
     argumentsList,
     {
-      cwd: TERRAFORM_DIR,
+      workingDirectory,
       extraEnvironment,
       onLog: pushLog,
     }
@@ -740,11 +844,14 @@ function checkHttpStatus(url, acceptedStatuses = [200]) {
   });
 }
 
-function terraformOutputRaw(name) {
+function terraformOutputRaw(
+  name,
+  workingDirectory = TERRAFORM_DIR
+) {
   return terraformService.outputRaw(
     name,
     {
-      cwd: TERRAFORM_DIR,
+      workingDirectory,
     }
   );
 }
@@ -1090,6 +1197,7 @@ async function waitForIaReady(ip, instanceType, expectedModel = null) {
     `Test OpenWebUI et cloud-init sur ${openWebUiUrl} (fenetre d'attente: ~${totalMinutes} min, instance=${instanceType}, modele=${expectedModel || 'n/a'})`,
     'info'
   );
+  
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (currentOperation.cancelReadiness) {
@@ -1411,6 +1519,17 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       `Session PostgreSQL creee : ${databaseSession.id}`,
       'info'
     );
+
+    const sessionTerraformDirectory =
+      prepareSessionTerraformDirectory(
+        databaseSession.id
+      );
+
+    pushLog(
+      `Dossier Terraform isole prepare : ${sessionTerraformDirectory}`,
+      'info'
+    );
+
     sessionState.databaseSessionId = databaseSession.id;
     draftSessionState.databaseSessionId = databaseSession.id;
     persistState();
@@ -1430,7 +1549,10 @@ pushLog(
       pushLog(`Modele attendu cote Ollama: ${expectedModel}`, 'info');
     }
 
-    const tfvarsPath = path.join(TERRAFORM_DIR, 'terraform.tfvars');
+    const tfvarsPath = path.join(
+      sessionTerraformDirectory,
+      'terraform.tfvars'
+    );
     const tfvarsContent =
       `workspace_name = ${hclString(finalWorkspaceName)}\n` +
       `workspace_slug = ${hclString(finalWorkspaceSlug)}\n` +
@@ -1479,7 +1601,11 @@ pushLog(
       'info'
     );
 
-    await runTerraform(['init', '-input=false']);
+    await runTerraform(
+      ['init', '-input=false'],
+      {},
+      sessionTerraformDirectory
+    );
 
     await runTerraform([
       'apply',
@@ -1502,11 +1628,22 @@ pushLog(
     ], {
       TF_VAR_owui_password: finalOwuiPassword,
       TF_VAR_webui_secret_key: finalWebuiSecretKey
-    });
+    }, sessionTerraformDirectory);
 
-    const ipOutput = terraformOutputRaw('instance_public_ip');
-    const instanceIdOutput = terraformOutputRaw('instance_id');
-    const accessUrlOutput = terraformOutputRaw('workspace_access_url');
+    const ipOutput = terraformOutputRaw(
+      'instance_public_ip',
+      sessionTerraformDirectory
+    );
+
+    const instanceIdOutput = terraformOutputRaw(
+      'instance_id',
+      sessionTerraformDirectory
+    );
+
+    const accessUrlOutput = terraformOutputRaw(
+      'workspace_access_url',
+      sessionTerraformDirectory
+    );
 
     if (ipOutput.status === 0) {
       const ip = ipOutput.stdout.trim();
