@@ -202,10 +202,36 @@ function validatePasswordChange(req, res, next) {
   return next();
 }
 
+function validateMfaCode(req, res, next) {
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Code MFA invalide.' });
+  req.body.code = code; return next();
+}
+function validateMfaChallenge(req, res, next) {
+  const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
+  if (!/^[A-Za-z0-9_-]{40,100}$/.test(challenge)) return res.status(400).json({ error: 'Challenge MFA invalide.' });
+  req.body.challenge = challenge; return next();
+}
+function validateRecoveryLogin(req, res, next) {
+  const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
+  const recoveryCode = typeof req.body?.recoveryCode === 'string' ? req.body.recoveryCode.trim() : '';
+  if (!/^[A-Za-z0-9_-]{40,100}$/.test(challenge) || recoveryCode.length > 32 || !recoveryCode) return res.status(400).json({ error: 'Code de récupération invalide.' });
+  req.body.challenge = challenge; req.body.recoveryCode = recoveryCode; return next();
+}
+function validateDisableMfa(req, res, next) {
+  const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+  if (!currentPassword || Buffer.byteLength(currentPassword, 'utf8') > 1024) return res.status(400).json({ error: 'Mot de passe invalide.' });
+  req.body.currentPassword = currentPassword; return validateMfaCode(req, res, next);
+}
+
 module.exports = {
   validateLogin,
   validateInvitationCreation,
   validateInvitationAcceptance,
   validateDeployment,
-  validatePasswordChange
+  validatePasswordChange,
+  validateMfaCode,
+  validateMfaChallenge,
+  validateRecoveryLogin,
+  validateDisableMfa
 };

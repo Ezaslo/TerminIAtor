@@ -438,6 +438,29 @@
       margin-bottom: 20px;
     }
 
+    #mfa-panel { max-width: 900px; }
+    .mfa-header { margin-bottom: 18px; }
+    .mfa-description { color: var(--text-muted); line-height: 1.6; }
+    .mfa-status { display: inline-flex; width: fit-content; padding: 6px 12px; border-radius: 999px; background: #334155; color: #cbd5e1; font-size: 13px; font-weight: 800; }
+    .mfa-status--enabled { background: rgba(22, 101, 52, 0.35); color: #bbf7d0; }
+    .mfa-status--disabled { background: #334155; color: #cbd5e1; }
+    .mfa-form, .mfa-actions { display: grid; gap: 14px; }
+    .mfa-setup { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .mfa-setup-grid { display: grid; grid-template-columns: minmax(210px, 260px) minmax(0, 1fr); gap: 24px; align-items: start; }
+    .mfa-qr-wrapper { display: grid; place-items: center; padding: 16px; border-radius: 12px; background: #fff; }
+    .mfa-qr-wrapper img { display: block; width: min(100%, 230px); height: auto; aspect-ratio: 1; }
+    .mfa-secret-box, .mfa-recovery-box { margin-top: 14px; padding: 14px; overflow-wrap: anywhere; border: 1px solid var(--border-light); border-radius: 10px; background: rgba(2, 6, 23, 0.65); }
+    .mfa-secret-box { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .mfa-recovery-box pre { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .mfa-disable { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .mfa-disable h3 { margin: 0 0 8px; }
+    .mfa-disable-warning { color: #fbbf24; }
+    .btn-secondary { background: #475569; }
+    .btn-secondary:hover { background: #64748b; }
+    .btn-danger { background: #991b1b; }
+    .btn-danger:hover { background: #b91c1c; }
+    #mfa-panel input:focus-visible, #mfa-panel button:focus-visible { outline: 3px solid rgba(56, 189, 248, 0.65); outline-offset: 2px; }
+
 
     .group-form {
       display: grid;
@@ -551,6 +574,8 @@
       .panel-header {
         flex-direction: column;
       }
+      .mfa-setup-grid { grid-template-columns: 1fr; }
+      .mfa-qr-wrapper { max-width: 280px; }
     }
 
     @media (max-width: 520px) {
@@ -566,6 +591,7 @@
       .panel {
         border-radius: 11px;
       }
+      .mfa-recovery-box pre { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -631,6 +657,16 @@
       </form>
 
       <p id="password-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="mfa-panel" class="panel mfa-card" aria-labelledby="mfa-panel-title">
+      <div class="panel-header mfa-header"><div><h2 id="mfa-panel-title">Authentification à deux facteurs</h2><p class="mfa-description">Protégez votre compte avec une application TOTP.</p></div></div>
+      <p id="mfa-status" class="message mfa-status mfa-status--disabled" role="status"></p>
+      <p id="mfa-message" class="message" role="alert" aria-live="polite"></p>
+      <button id="mfa-setup-button" class="primary-button" type="button">Activer la MFA</button>
+      <div id="mfa-setup" class="mfa-setup" hidden><div class="mfa-setup-grid"><div class="mfa-qr-wrapper"><img id="mfa-qr" alt="QR code MFA"></div><div class="mfa-form"><p>1. Scannez le QR code avec votre application.<br>2. Saisissez le code à 6 chiffres.<br>3. Conservez ensuite les codes de récupération.</p><div class="mfa-secret-box"><strong>Clé manuelle</strong><p id="mfa-secret"></p></div><label for="mfa-confirm-code">Code TOTP</label><input id="mfa-confirm-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Code à 6 chiffres"><div class="mfa-actions"><button id="mfa-confirm-button" class="primary-button" type="button">Confirmer l’activation</button></div></div></div></div>
+      <div id="mfa-recovery" class="mfa-recovery-box" hidden><p>Ces codes ne seront affichés qu’une seule fois.</p><pre id="mfa-recovery-codes"></pre><button id="mfa-copy" class="btn-secondary" type="button">Copier les codes</button></div>
+      <div id="mfa-disable" class="mfa-disable" hidden><h3>Désactiver la MFA</h3><p class="mfa-disable-warning">La désactivation déconnectera vos sessions actives.</p><div class="mfa-form"><label for="mfa-current-password">Mot de passe actuel</label><input id="mfa-current-password" type="password" autocomplete="current-password"><label for="mfa-disable-code">Code TOTP</label><input id="mfa-disable-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><button id="mfa-disable-button" class="btn-danger" type="button">Désactiver la MFA</button></div></div>
     </section>
 
     <section

@@ -86,9 +86,16 @@ const loginLimiter = rateLimit({
   }
 });
 
+const mfaVerifyLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Trop de tentatives MFA. Réessaie dans 15 minutes.' } });
+const mfaManagementLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Trop de tentatives. Réessaie dans 15 minutes.' } });
+
 
 
 app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/mfa/verify', mfaVerifyLimiter);
+app.use('/api/auth/mfa/recovery', mfaVerifyLimiter);
+app.use('/api/auth/mfa/setup', mfaManagementLimiter);
+app.use('/api/auth/mfa/confirm', mfaManagementLimiter);
 app.use(cors({
   origin(origin, callback) {
     if (!origin || ALLOWED_ORIGINS.has(origin)) {

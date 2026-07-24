@@ -16,6 +16,7 @@ async function createAuthSession({
   expiresAt,
   ipAddress = null,
   userAgent = null,
+  client = null,
 }) {
   if (
     !userId ||
@@ -29,7 +30,8 @@ async function createAuthSession({
 
   const id = crypto.randomUUID();
 
-  const result = await database.query(
+  const executor = client || database;
+  const result = await executor.query(
     `
       INSERT INTO auth_sessions (
         id,
@@ -202,15 +204,28 @@ async function deleteInactiveAuthSessions() {
   return result.rowCount;
 }
 
-async function revokeOtherAuthSessionsByUserId({ userId, currentSessionId }) {
+async function revokeOtherAuthSessionsByUserId({
+  userId,
+  currentSessionId,
+  client = null,
+}) {
   if (!userId || !currentSessionId) {
     throw new Error('L’utilisateur et la session actuelle sont obligatoires.');
   }
-  const result = await database.query(
+  const executor = client || database;
+  const result = await executor.query(
     `UPDATE auth_sessions SET revoked_at = NOW()
      WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL
      RETURNING id, revoked_at`,
     [userId, currentSessionId]
+  );
+  return result.rows;
+}
+
+async function revokeAllAuthSessionsByUserId({ userId, client = null }) {
+  const result = await (client || database).query(
+    `UPDATE auth_sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL RETURNING id, revoked_at`,
+    [userId]
   );
   return result.rows;
 }
@@ -222,5 +237,6 @@ module.exports = {
   revokeAuthSessionByTokenHash,
   revokeAuthSessionById,
   revokeOtherAuthSessionsByUserId,
+  revokeAllAuthSessionsByUserId,
   deleteInactiveAuthSessions,
 };

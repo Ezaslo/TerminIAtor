@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const config = require(
   '../config/env'
 );
@@ -17,6 +18,8 @@ const passwordService = require(
 const authService = require(
   '../services/auth.service'
 );
+const mfaService = require('../services/mfa.service');
+const mfaRepository = require('../repositories/mfa.repository');
 
 /**
  * Connecte un utilisateur au portail.
@@ -63,6 +66,23 @@ async function login(
       return response.status(401).json({
         error: 'Identifiants invalides.',
       });
+    }
+
+    const userMfa = await mfaRepository.findUserMfaByUserId(user.id);
+    if (userMfa?.enabled) {
+      const challenge = mfaService.createChallengeToken();
+      await mfaRepository.invalidateActiveChallenges({ userId: user.id, purpose: 'login' });
+      await mfaRepository.createChallenge({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        challengeHash: mfaService.hashChallengeToken(challenge),
+        purpose: 'login',
+        expiresAt: new Date(Date.now() + config.mfa.challengeTtlSeconds * 1000),
+        ipAddress: request.ip || null,
+        userAgent: request.get('user-agent') || null,
+        maxAttempts: config.mfa.maxAttempts,
+      });
+      return response.status(202).json({ mfaRequired: true, challenge, expiresIn: config.mfa.challengeTtlSeconds });
     }
 
     const sessionToken =
@@ -182,6 +202,8 @@ async function changePassword(request, response, next) {
     if (!await passwordService.verifyPassword(currentPassword, user.password_hash)) {
       return response.status(401).json({ error: 'Le mot de passe actuel est incorrect.' });
     }
+
+
     if (await passwordService.verifyPassword(newPassword, user.password_hash)) {
       return response.status(400).json({ error: 'Le nouveau mot de passe doit être différent du mot de passe actuel.' });
     }

@@ -21,6 +21,33 @@ function parseInteger(value, fallback) {
   return parsedValue;
 }
 
+function parseBoundedInteger(value, name, minimum, maximum, fallback) {
+  const parsed = value === undefined || value === ''
+    ? fallback
+    : Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} doit être un entier entre ${minimum} et ${maximum}.`);
+  }
+  return parsed;
+}
+
+function loadMfaEncryptionKey() {
+  const raw = process.env.MFA_ENCRYPTION_KEY;
+  if (!raw) {
+    throw new Error('MFA_ENCRYPTION_KEY est obligatoire et doit être un base64 de 32 octets.');
+  }
+  let key;
+  try {
+    key = Buffer.from(raw, 'base64');
+  } catch (_) {
+    throw new Error('MFA_ENCRYPTION_KEY doit être un base64 valide.');
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || key.length !== 32) {
+    throw new Error('MFA_ENCRYPTION_KEY doit être un base64 produisant exactement 32 octets.');
+  }
+  return key;
+}
+
 /**
  * Recherche l'exécutable Terraform.
  *
@@ -146,6 +173,24 @@ const config = {
   secureCookies:
     process.env.NODE_ENV === 'production',
 },
+  mfa: {
+    encryptionKey: loadMfaEncryptionKey(),
+    issuer: (process.env.MFA_ISSUER || 'TerminIAtor').trim(),
+    challengeTtlSeconds: parseBoundedInteger(
+      process.env.MFA_CHALLENGE_TTL_SECONDS,
+      'MFA_CHALLENGE_TTL_SECONDS',
+      60,
+      900,
+      300
+    ),
+    maxAttempts: parseBoundedInteger(
+      process.env.MFA_MAX_ATTEMPTS,
+      'MFA_MAX_ATTEMPTS',
+      1,
+      10,
+      5
+    ),
+  },
   database: {
   url: (
     process.env.DATABASE_URL || ''

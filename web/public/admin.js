@@ -27,6 +27,25 @@ const confirmPasswordInput = document.getElementById('confirm-password');
 const passwordSubmit = document.getElementById('password-submit');
 const passwordMessage = document.getElementById('password-message');
 const adminOnlyElements = document.querySelectorAll('.admin-only');
+const mfaStatus = document.getElementById('mfa-status');
+const mfaSetupButton = document.getElementById('mfa-setup-button');
+const mfaSetup = document.getElementById('mfa-setup');
+const mfaRecovery = document.getElementById('mfa-recovery');
+const mfaDisable = document.getElementById('mfa-disable');
+const mfaMessage = document.getElementById('mfa-message');
+let mfaSecret = null;
+
+async function loadMfaStatus() {
+  const data = await requestJson('/api/auth/mfa/status');
+  mfaStatus.textContent = data.enabled ? `MFA active${data.confirmedAt ? ` depuis ${formatDate(data.confirmedAt)}` : ''}.` : 'MFA inactive.';
+  mfaStatus.className = `message mfa-status ${data.enabled ? 'mfa-status--enabled' : 'mfa-status--disabled'}`;
+  mfaSetupButton.hidden = data.enabled; mfaDisable.hidden = !data.enabled;
+}
+function displayMfaError(error) { mfaMessage.textContent = error.message || 'Action MFA impossible.'; mfaMessage.className = 'message error'; }
+mfaSetupButton.addEventListener('click', async () => { try { const data = await requestJson('/api/auth/mfa/setup', { method: 'POST' }); mfaSecret = data.secret; document.getElementById('mfa-qr').src = data.qrCodeDataUrl; document.getElementById('mfa-secret').textContent = `Secret : ${data.secret}`; mfaSetup.hidden = false; } catch (error) { displayMfaError(error); } });
+document.getElementById('mfa-confirm-button').addEventListener('click', async () => { try { const data = await requestJson('/api/auth/mfa/confirm', { method: 'POST', body: { code: document.getElementById('mfa-confirm-code').value } }); document.getElementById('mfa-recovery-codes').textContent = data.recoveryCodes.join('\n'); document.getElementById('mfa-qr').src = ''; document.getElementById('mfa-secret').textContent = ''; document.getElementById('mfa-confirm-code').value = ''; mfaRecovery.hidden = false; mfaSetup.hidden = true; mfaSetupButton.hidden = true; mfaDisable.hidden = false; mfaSecret = null; await loadMfaStatus(); } catch (error) { displayMfaError(error); } });
+document.getElementById('mfa-copy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(document.getElementById('mfa-recovery-codes').textContent); mfaMessage.textContent = 'Codes copiés.'; } catch (error) { displayMfaError(error); } });
+document.getElementById('mfa-disable-button').addEventListener('click', async () => { try { await requestJson('/api/auth/mfa', { method: 'DELETE', body: { currentPassword: document.getElementById('mfa-current-password').value, code: document.getElementById('mfa-disable-code').value } }); window.location.replace('/login.html'); } catch (error) { displayMfaError(error); } });
 
 let authenticatedUser = null;
 let tenantUsers = [];
@@ -462,6 +481,7 @@ async function loadAdministrationPage(authentication) {
   }
 
   configurePageForRole(authenticatedUser);
+  try { await loadMfaStatus(); } catch (error) { mfaStatus.textContent = error.message; }
 
   if (!isAdministrator(authenticatedUser)) {
     displayPageMessage('');
