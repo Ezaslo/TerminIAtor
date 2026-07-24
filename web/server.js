@@ -204,7 +204,7 @@ const AI_PULL_MAP = {
 const AUTH_MODES = new Set(['local_admin', 'trusted_header']);
 
 const DEFAULT_GPU_FLAVOR =
-  process.env.OVH_GPU_FLAVOR || 'gpu-rtx5000';
+  process.env.OVH_GPU_FLAVOR || 'l4-90';
 
 const INSTANCE_TYPES = new Set([
   DEFAULT_GPU_FLAVOR
@@ -1687,14 +1687,16 @@ if (!INSTANCE_TYPES.has(instanceType)) {
 
   const finalAllowedCidr = allowedCidr.trim();
   const finalInstanceType = instanceType.trim();
-  const finalWorkspaceSlug = slugifyWorkspaceName(finalWorkspaceName);
+  const finalWorkspaceSlug =
+  `${slugifyWorkspaceName(finalWorkspaceName)}-${crypto.randomUUID().slice(0, 8)}`;
   const finalWorkspaceUrl = typeof workspaceUrl === 'string' ? workspaceUrl.trim() : '';
   const finalAuthMode = authMode;
   const finalOwuiPassword =
     finalAuthMode === 'trusted_header'
       ? crypto.randomBytes(18).toString('base64url')
       : owuiPassword;
-  const finalWebuiSecretKey = crypto.randomBytes(48).toString('hex');
+  const finalWebuiSecretKey = crypt
+  o.randomBytes(48).toString('hex');
   const expectedModel = AI_PULL_MAP[aiChoice] || null;
   const accessNotes = buildAccessNotes(
     finalAuthMode,
