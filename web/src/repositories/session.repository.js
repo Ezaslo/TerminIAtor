@@ -300,6 +300,42 @@ async function listSessionsByTenantId(tenantId) {
  * @param {string} status Nouveau statut.
  * @returns {Promise<object|null>}
  */
+/**
+ * Enregistre les informations d'infrastructure OVH d'une session.
+ *
+ * @param {string} sessionId Identifiant de la session.
+ * @param {object} infrastructure Données retournées par Terraform.
+ * @returns {Promise<object|null>}
+ */
+async function updateSessionInfrastructure(
+  sessionId,
+  infrastructure
+) {
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        instance_id = $2,
+        elastic_ip = $3,
+        dns_name = $4,
+        access_url = $5,
+        terraform_directory = $6,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      sessionId,
+      infrastructure.instanceId || null,
+      infrastructure.publicIp || null,
+      infrastructure.dnsName || null,
+      infrastructure.accessUrl || null,
+      infrastructure.terraformDirectory || null,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 async function updateSessionStatus(
   sessionId,
   status
@@ -423,6 +459,7 @@ module.exports = {
   markSessionDestroyed,
   getDraftSessionState,
   updateSessionStatus,
+  updateSessionInfrastructure,
   canUserAccessSession,
   getSessionSecrets,
   clearSessionState,

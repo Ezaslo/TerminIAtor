@@ -1660,6 +1660,22 @@ pushLog(
         pushLog(`Instance OVH : ${instanceId}`, 'info');
       }
       pushLog(`URL de session : ${accessUrl}`, 'success');
+            await sessionRepository.updateSessionInfrastructure(
+        databaseSession.id,
+        {
+          instanceId,
+          publicIp: ip,
+          dnsName: null,
+          accessUrl,
+          terraformDirectory:
+            sessionTerraformDirectory,
+        }
+      );
+
+      pushLog(
+        'Infrastructure OVH enregistrée en PostgreSQL.',
+        'success'
+      );
 
       sessionState.active = true;
       sessionState.status = 'provisioning';
