@@ -110,7 +110,6 @@ function updateSummaryPreview() {
   const mode = getSelectedMode();
   const modeLabel = mode === 'team' ? 'Équipe' : 'Individuel';
   const durationLabel = getDurationLabel();
-  const analysisLabel = getAnalysisLabel();
   const groupLabel = mode === 'team' ? getGroupLabel() : '';
 
   preview.innerHTML =
@@ -120,7 +119,6 @@ function updateSummaryPreview() {
       ? `Groupe : ${escapeHtml(groupLabel || 'Aucun groupe sélectionné')}<br />`
       : '') +
     `Durée : ${escapeHtml(durationLabel)}<br />` +
-    `Analyse : ${escapeHtml(analysisLabel)}<br />` +
     `Suppression automatique à expiration`;
 }
 async function loadAvailableGroups() {
@@ -245,8 +243,7 @@ function collectDeployPayload() {
     sessionMode: getSelectedMode(),
     groupId:
       document.getElementById('groupId')?.value || null,
-    analysisType:
-      document.getElementById('analysisType')?.value || 'summary'
+    
   };
 }
 
@@ -412,12 +409,7 @@ function renderSessionSummary(
     ) &&
     !isRunning;
 
-  const analysisLabels = {
-    summary: 'Synthèse du contrat',
-    'sensitive-clauses': 'Détection des clauses sensibles',
-    comparison: 'Comparaison de contrats',
-    questions: 'Questions-réponses sur les documents'
-  };
+
 
   summary.classList.toggle('ready', status === 'ready');
 
