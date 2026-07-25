@@ -1695,8 +1695,7 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     finalAuthMode === 'trusted_header'
       ? crypto.randomBytes(18).toString('base64url')
       : owuiPassword;
-  const finalWebuiSecretKey = crypt
-  o.randomBytes(48).toString('hex');
+  const finalWebuiSecretKey = crypto.randomBytes(48).toString('hex');
   const expectedModel = AI_PULL_MAP[aiChoice] || null;
   const accessNotes = buildAccessNotes(
     finalAuthMode,

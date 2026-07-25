@@ -1,0 +1,6 @@
+openstack_region     = "GRA11"
+external_network_name = "Ext-Net"
+image_name            = "Ubuntu 22.04"
+instance_type         = "A_REMPLACER_PAR_LE_FLAVOR_GPU_OVH"
+allowed_cidr          = "203.0.113.10/32"
+webui_secret_key      = "A_FOURNIR_PAR_VARIABLE_D_ENVIRONNEMENT"
