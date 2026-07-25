@@ -35,7 +35,7 @@ resource "openstack_compute_instance_v2" "ai_host" {
   flavor_id    = data.openstack_compute_flavor_v2.gpu.id
   config_drive = true
 
-  security_groups = [openstack_networking_secgroup_v2.ai.name]
+  security_groups = [data.openstack_networking_secgroup_v2.shared.name]
 
   block_device {
     uuid                  = data.openstack_images_image_v2.ubuntu.id

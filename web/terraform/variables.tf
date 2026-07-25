@@ -5,8 +5,9 @@ variable "project" {
 }
 
 variable "openstack_region" {
-  description = "Region OVH Public Cloud, par exemple GRA11 ou SBG5"
+  description = "Region OVH Public Cloud"
   type        = string
+  default     = "GRA11"
 }
 
 variable "external_network_name" {
@@ -18,12 +19,10 @@ variable "external_network_name" {
 variable "image_name" {
   description = "Nom exact de l'image Ubuntu disponible dans le projet OVH"
   type        = string
+  default     = "Ubuntu 24.04"
 }
 
-variable "instance_type" {
-  description = "Nom exact du flavor GPU OVH/OpenStack"
-  type        = string
-}
+
 
 variable "workspace_name" {
   description = "Nom lisible de la session"
@@ -113,7 +112,11 @@ variable "open_webui_image" {
   type    = string
   default = "ghcr.io/open-webui/open-webui:v0.8.12"
 }
-
+variable "instance_type" {
+  description = "Nom exact du flavor GPU OVH/OpenStack"
+  type        = string
+  default     = "l4-90"
+}
 variable "webui_secret_key" {
   type      = string
   sensitive = true
