@@ -8,7 +8,7 @@
     content="width=device-width, initial-scale=1.0"
   >
 
-  <title>Accepter lâ€™invitation â€” Privalyse</title>
+  <title>Accepter l’invitation — Privalyse</title>
 
   <style>
     * {
@@ -166,8 +166,8 @@
       <h1>Termin<span>IA</span>tor</h1>
 
       <p>
-        Acceptez votre invitation et crÃ©ez
-        votre compte sÃ©curisÃ©.
+        Acceptez votre invitation et créez
+        votre compte sécurisé.
       </p>
     </header>
 
@@ -175,7 +175,7 @@
       id="loading-message"
       class="message"
     >
-      VÃ©rification de lâ€™invitationâ€¦
+      Vérification de l’invitation…
     </p>
 
     <section
@@ -207,7 +207,7 @@
 
         <div class="detail">
           <span class="detail-label">
-            RÃ´le
+            Rôle
           </span>
 
           <span
@@ -252,7 +252,7 @@
           id="submit-button"
           type="submit"
         >
-          CrÃ©er mon compte
+          Créer mon compte
         </button>
       </form>
     </section>
@@ -313,7 +313,7 @@
     async function loadInvitation() {
       if (!token) {
         displayError(
-          'Le lien dâ€™invitation est incomplet.'
+          'Le lien d’invitation est incomplet.'
         );
 
         return;
@@ -394,7 +394,7 @@
 
         if (password.length < 8) {
           displayError(
-            'Le mot de passe doit contenir au moins 8 caractÃ¨res.'
+            'Le mot de passe doit contenir au moins 8 caractères.'
           );
 
           return;
@@ -410,7 +410,7 @@
 
         submitButton.disabled = true;
         submitButton.textContent =
-          'CrÃ©ation du compteâ€¦';
+          'Création du compte…';
 
         try {
           const response = await fetch(
@@ -436,7 +436,7 @@
           if (!response.ok) {
             throw new Error(
               data.error ||
-              'CrÃ©ation du compte impossible.'
+              'Création du compte impossible.'
             );
           }
 
@@ -445,7 +445,7 @@
           );
 
           resultMessage.textContent =
-            'Compte crÃ©Ã©. Redirection vers la connexionâ€¦';
+            'Compte créé. Redirection vers la connexion…';
 
           resultMessage.className =
             'message success';
@@ -464,7 +464,7 @@
 
           submitButton.disabled = false;
           submitButton.textContent =
-            'CrÃ©er mon compte';
+            'Créer mon compte';
         }
       }
     );
