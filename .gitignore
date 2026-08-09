@@ -4,12 +4,34 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Terraform
-.terraform/
+# Local configuration / secrets
+.env
+.env.*
+!.env.example
+.local-admin-credentials.txt
+
+# Runtime
+.runtime/
+web/.runtime
+web/terraform-sessions
+
+# Node
+node_modules/
+web/node_modules/
+
+# Terraform runtime
+**/.terraform/
+**/.terraform
 *.tfstate
 *.tfstate.*
-*.tfvars
-terraform.tfstate.backup
+crash.log
+crash.*.log
+terraform.tfvars
+*.auto.tfvars
+
+# Keep Terraform examples and provider lockfile
+!terraform.tfvars.example
+!*.tfvars.example
 
 # OS
 .DS_Store
