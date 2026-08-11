@@ -855,33 +855,66 @@ function prepareSessionTerraformDirectory(sessionId) {
   const sessionDirectory =
     getSessionTerraformDirectory(sessionId);
 
+  const sessionsRootDirectory = path.resolve(
+    __dirname,
+    'terraform-sessions'
+  );
+
+  const resolvedSessionDirectory =
+    path.resolve(sessionDirectory);
+
+  // Empêche toute sortie du dossier terraform-sessions.
+  if (
+    !resolvedSessionDirectory.startsWith(
+      `${sessionsRootDirectory}${path.sep}`
+    )
+  ) {
+    throw new Error(
+      'Dossier Terraform de session invalide'
+    );
+  }
+
+  // Ne jamais recopier un état ou un fichier propre
+  // à une ancienne exécution Terraform.
   const excludedNames = new Set([
     '.terraform',
-    '.terraform.lock.hcl',
     'terraform.tfstate',
     'terraform.tfstate.backup',
     'terraform.tfvars',
+    'crash.log',
   ]);
 
-  fs.rmSync(sessionDirectory, {
-    recursive: true,
-    force: true,
-  });
+  fs.rmSync(
+    resolvedSessionDirectory,
+    {
+      recursive: true,
+      force: true,
+    }
+  );
 
-  fs.mkdirSync(sessionDirectory, {
-    recursive: true,
-  });
+  fs.mkdirSync(
+    resolvedSessionDirectory,
+    {
+      recursive: true,
+    }
+  );
 
-  function copyDirectory(sourceDirectory, targetDirectory) {
-    for (
-      const entry of fs.readdirSync(
-        sourceDirectory,
-        { withFileTypes: true }
-      )
-    ) {
+  function copyDirectory(
+    sourceDirectory,
+    targetDirectory
+  ) {
+    const entries = fs.readdirSync(
+      sourceDirectory,
+      {
+        withFileTypes: true,
+      }
+    );
+
+    for (const entry of entries) {
       if (
         excludedNames.has(entry.name) ||
-        entry.name.startsWith('terraform.tfstate.')
+        entry.name.startsWith('terraform.tfstate.') ||
+        entry.name.endsWith('.tfplan')
       ) {
         continue;
       }
@@ -897,9 +930,12 @@ function prepareSessionTerraformDirectory(sessionId) {
       );
 
       if (entry.isDirectory()) {
-        fs.mkdirSync(targetPath, {
-          recursive: true,
-        });
+        fs.mkdirSync(
+          targetPath,
+          {
+            recursive: true,
+          }
+        );
 
         copyDirectory(
           sourcePath,
@@ -920,10 +956,21 @@ function prepareSessionTerraformDirectory(sessionId) {
 
   copyDirectory(
     TERRAFORM_DIR,
-    sessionDirectory
+    resolvedSessionDirectory
   );
 
-  return sessionDirectory;
+  const statePath = path.join(
+    resolvedSessionDirectory,
+    'terraform.tfstate'
+  );
+
+  if (fs.existsSync(statePath)) {
+    throw new Error(
+      `Un terraform.tfstate existe deja dans ${resolvedSessionDirectory}`
+    );
+  }
+
+  return resolvedSessionDirectory;
 }
 
 function runTerraform(
