@@ -1,28 +1,26 @@
 variable "project" {
-  description = "Nom technique du projet"
+  description = "Nom technique du projet TerminIAtor"
   type        = string
-  default     = "privalyse"
+  default     = "terminiator"
 }
 
 variable "openstack_region" {
-  description = "Region OVH Public Cloud"
+  description = "Region OpenStack Infomaniak"
   type        = string
-  default     = "GRA11"
+  default     = "dc4-a"
 }
 
 variable "external_network_name" {
-  description = "Nom du reseau public OVH/OpenStack"
+  description = "Nom du reseau public OpenStack utilise pendant le developpement"
   type        = string
-  default     = "Ext-Net"
+  default     = "ext-net1"
 }
 
 variable "image_name" {
-  description = "Nom exact de l'image Ubuntu disponible dans le projet OVH"
+  description = "Nom exact de l'image Ubuntu Infomaniak"
   type        = string
-  default     = "Ubuntu 24.04"
+  default     = "Ubuntu 24.04 LTS Noble Numbat"
 }
-
-
 
 variable "workspace_name" {
   description = "Nom lisible de la session"
@@ -50,22 +48,22 @@ variable "session_ttl_hours" {
 variable "team_size_hint" {
   description = "Nombre estime d'utilisateurs simultanes"
   type        = number
-  default     = 5
+  default     = 3
 }
 
 variable "root_volume_size_gb" {
   description = "Taille du volume racine en Gio"
   type        = number
-  default     = 120
+  default     = 40
 
   validation {
-    condition     = var.root_volume_size_gb >= 80
-    error_message = "root_volume_size_gb doit etre superieur ou egal a 80."
+    condition     = var.root_volume_size_gb >= 30
+    error_message = "root_volume_size_gb doit etre superieur ou egal a 30."
   }
 }
 
 variable "allowed_cidr" {
-  description = "IP publique du backend Privalyse au format /32"
+  description = "IP publique du backend TerminIAtor au format CIDR, idealement /32"
   type        = string
 
   validation {
@@ -75,7 +73,7 @@ variable "allowed_cidr" {
 }
 
 variable "workspace_url" {
-  description = "URL Privalyse exposee aux utilisateurs"
+  description = "URL technique du workspace, si elle doit etre surchargee"
   type        = string
   default     = ""
 }
@@ -92,50 +90,58 @@ variable "auth_mode" {
 }
 
 variable "ai_choice" {
-  description = "Identifiant du modele selectionne"
+  description = "Identifiant du modele IA selectionne"
   type        = string
-  default     = "qwen-7b"
+  default     = "qwen-mini"
 }
 
 variable "ollama_model" {
-  description = "Modele Ollama a precharger"
+  description = "Modele Ollama CPU a precharger"
   type        = string
-  default     = "qwen2.5:7b"
+  default     = "qwen2.5:0.5b"
 }
 
 variable "ollama_image" {
-  type    = string
-  default = "ollama/ollama:0.21.0"
+  description = "Image Docker Ollama"
+  type        = string
+  default     = "ollama/ollama:0.21.0"
 }
 
 variable "open_webui_image" {
-  type    = string
-  default = "ghcr.io/open-webui/open-webui:v0.8.12"
-}
-variable "instance_type" {
-  description = "Nom exact du flavor GPU OVH/OpenStack"
+  description = "Image Docker OpenWebUI"
   type        = string
-  default     = "l4-90"
+  default     = "ghcr.io/open-webui/open-webui:v0.8.12"
 }
+
+variable "instance_type" {
+  description = "Nom exact du flavor CPU OpenStack Infomaniak"
+  type        = string
+  default     = "a4-ram8-disk0"
+}
+
 variable "webui_secret_key" {
-  type      = string
-  sensitive = true
+  description = "Cle secrete propre a la session OpenWebUI"
+  type        = string
+  sensitive   = true
 }
 
 variable "owui_name" {
-  type    = string
-  default = "Admin"
+  description = "Nom du compte administrateur OpenWebUI"
+  type        = string
+  default     = "Admin"
 }
 
 variable "owui_email" {
-  type    = string
-  default = ""
+  description = "Adresse e-mail du compte administrateur OpenWebUI"
+  type        = string
+  default     = ""
 }
 
 variable "owui_password" {
-  type      = string
-  default   = ""
-  sensitive = true
+  description = "Mot de passe du compte administrateur OpenWebUI"
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "trusted_email_header" {
