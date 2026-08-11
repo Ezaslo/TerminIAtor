@@ -1833,6 +1833,7 @@ if (!INSTANCE_TYPES.has(instanceType)) {
   ).toISOString();
 
   let databaseSession = null;
+  let sessionTerraformDirectory = null;
 
   try {
     currentOperation.type = 'deploy';
@@ -1879,10 +1880,10 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       'info'
     );
 
-    const sessionTerraformDirectory =
-      prepareSessionTerraformDirectory(
-        databaseSession.id
-      );
+    sessionTerraformDirectory =
+    prepareSessionTerraformDirectory(
+    databaseSession.id
+  );
 
     pushLog(
       `Dossier Terraform isole prepare : ${sessionTerraformDirectory}`,
@@ -2085,43 +2086,65 @@ sessionState.groupId =
       sessionSecrets.jwtExpiresAt = null;
       persistState();
 
-      currentOperation.phase = 'readiness';
-      const readiness =await waitForIaReady(ip,expectedModel);
-      if (readiness.cancelled) {
-        currentOperation.type = 'idle';
-        currentOperation.status = 'idle';
-        currentOperation.phase = 'idle';
-        currentOperation.cancelReadiness = false;
-        pushLog(
-          'Deploy interrompu pendant les tentatives readiness pour permettre une destruction',
-          'info'
-        );
-        return res.status(409).json({
-          ok: false,
-          error: 'Deploy interrompu pour permettre la destruction'
-        });
-      }
-      if (readiness.ready) {
-        if (finalAuthMode === 'trusted_header') {
-          pushLog(
-            `Mode trusted_header actif: fais passer ${finalTrustedEmailHeader} via ton proxy d'entreprise`,
-            'success'
-          );
-        } else {
-          pushLog(
-            `Mode local_admin actif: utilise ${maskEmail(finalOwuiEmail)} pour l'administration initiale`,
-            'success'
-          );
-        }
-        sessionState.status = 'ready';
-        draftSessionState.status = 'ready';
-        persistState();
-        
-      }
-    } else {
-      pushLog('Impossible de recuperer instance_public_ip', 'error');
-    }
+    currentOperation.phase = 'readiness';
 
+const readiness =
+  await waitForIaReady(
+    ip,
+    expectedModel
+  );
+
+if (readiness.cancelled) {
+  currentOperation.type = 'idle';
+  currentOperation.status = 'idle';
+  currentOperation.phase = 'idle';
+  currentOperation.cancelReadiness = false;
+
+  pushLog(
+    'Deploy interrompu pendant la readiness pour permettre une destruction',
+    'info'
+  );
+
+  return res.status(409).json({
+    ok: false,
+    error:
+      'Deploy interrompu pour permettre la destruction',
+  });
+}
+
+if (!readiness.ready) {
+  sessionState.status = 'error';
+  draftSessionState.status = 'error';
+
+  persistState();
+
+  throw new Error(
+    'Le workspace a ete provisionne mais OpenWebUI ne repond pas dans le delai imparti.'
+  );
+}
+
+if (finalAuthMode === 'trusted_header') {
+  pushLog(
+    `Mode trusted_header actif: fais passer ${finalTrustedEmailHeader} via ton proxy d'entreprise`,
+    'success'
+  );
+} else {
+  pushLog(
+    `Mode local_admin actif: utilise ${maskEmail(finalOwuiEmail)} pour l'administration initiale`,
+    'success'
+  );
+}
+
+sessionState.status = 'ready';
+draftSessionState.status = 'ready';
+
+persistState();
+
+} else {
+  throw new Error(
+    'Impossible de recuperer instance_public_ip'
+  );
+}
     currentOperation.status = 'success';
     currentOperation.phase = 'idle';
     currentOperation.cancelReadiness = false;
@@ -2139,20 +2162,134 @@ sessionState.groupId =
 
     return res.json({ ok: true });
   } catch (e) {
-    currentOperation.status = 'error';
-    currentOperation.phase = 'idle';
-    currentOperation.cancelReadiness = false;
-    const message = String(e && e.message ? e.message : e);
-    if (/quota|limit exceeded|overlimit|flavor/i.test(message)) {
-    const quotaHelp =
-    'Quota Infomaniak Public Cloud insuffisant ou flavor CPU indisponible dans la region choisie.';
-      pushLog(quotaHelp, 'error');
-      pushLog(`Erreur deploy: ${message}`, 'error');
-      return res.status(409).json({ ok: false, error: quotaHelp });
-    }
+  const message = String(
+    e && e.message ? e.message : e
+  );
 
-    pushLog(`Erreur deploy: ${message}`, 'error');
-    return res.status(500).json({ ok: false, error: message });
+  currentOperation.status = 'error';
+  currentOperation.phase = 'cleanup';
+  currentOperation.cancelReadiness = false;
+
+  pushLog(
+    `Erreur deploy: ${message}`,
+    'error'
+  );
+
+  /*
+   * Si le dossier Terraform de la session existe déjà,
+   * un apply a potentiellement créé une partie de
+   * l'infrastructure.
+   *
+   * On tente donc toujours un destroy avec le même state.
+   */
+  if (sessionTerraformDirectory) {
+    pushLog(
+      'Tentative de nettoyage automatique de l infrastructure partiellement provisionnee...',
+      'info'
+    );
+
+    try {
+      await runTerraform(
+        [
+          'destroy',
+          '-auto-approve',
+        ],
+        {
+          TF_VAR_allowed_cidr:
+            config.workspace.allowedCidr ||
+            '127.0.0.1/32',
+
+          TF_VAR_webui_secret_key:
+            crypto.randomBytes(48).toString('hex'),
+
+          TF_VAR_owui_password:
+            crypto.randomBytes(24).toString('base64url'),
+        },
+        sessionTerraformDirectory
+      );
+
+      pushLog(
+        'Infrastructure partielle detruite automatiquement.',
+        'success'
+      );
+
+      if (databaseSession) {
+        await sessionRepository.markSessionDestroyed(
+          databaseSession.id
+        );
+      }
+
+      if (
+        databaseSession &&
+        sessionState.databaseSessionId ===
+          databaseSession.id
+      ) {
+        clearSessionLikeState(
+          sessionState
+        );
+
+        clearSessionLikeState(
+          draftSessionState
+        );
+
+        clearSessionSecrets();
+
+        persistState();
+      }
+    } catch (cleanupError) {
+      pushLog(
+        `Echec du nettoyage automatique: ${cleanupError.message}`,
+        'error'
+      );
+
+      /*
+       * On ne masque surtout pas l'erreur initiale.
+       * La session reste en erreur pour permettre
+       * une intervention/destruction manuelle.
+       */
+      if (databaseSession) {
+        try {
+          await sessionRepository.updateSessionStatus(
+            databaseSession.id,
+            'error'
+          );
+        } catch (statusError) {
+          pushLog(
+            `Impossible de marquer la session en erreur: ${statusError.message}`,
+            'error'
+          );
+        }
+      }
+    }
+  }
+
+  currentOperation.status = 'error';
+  currentOperation.phase = 'idle';
+  currentOperation.cancelReadiness = false;
+
+  if (
+    /quota|limit exceeded|overlimit|flavor/i.test(
+      message
+    )
+  ) {
+    const quotaHelp =
+      'Quota Infomaniak Public Cloud insuffisant ou flavor CPU indisponible dans la region choisie.';
+
+    pushLog(
+      quotaHelp,
+      'error'
+    );
+
+    return res.status(409).json({
+      ok: false,
+      error: quotaHelp,
+    });
+  }
+
+return res.status(500).json({
+  ok: false,
+  error: message,
+});
   }
 });
 
