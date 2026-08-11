@@ -229,7 +229,9 @@ async function createSession(session) {
         slug,
         status,
         terraform_directory,
-        expires_at
+        expires_at,
+        session_mode,
+        group_id
       )
       VALUES (
         $1,
@@ -239,7 +241,9 @@ async function createSession(session) {
         $5,
         $6,
         $7,
-        $8
+        $8,
+        $9,
+        $10
       )
       RETURNING *
     `,
@@ -252,6 +256,8 @@ async function createSession(session) {
       session.status || 'queued',
       session.terraformDirectory || null,
       session.expiresAt || null,
+      session.sessionMode || 'individual',
+      session.groupId || null,
     ]
   );
 
