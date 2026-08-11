@@ -65,7 +65,7 @@ resource "openstack_compute_instance_v2" "ai_host" {
   metadata = {
     project         = var.project
     workspace       = var.workspace_slug
-    managed_by      = "terminiator"
+    managed_by      = "privalyse"
     compute_profile = "cpu"
     session_ttl_h   = tostring(var.session_ttl_hours)
   }

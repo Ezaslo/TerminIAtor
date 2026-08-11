@@ -1,7 +1,7 @@
 variable "project" {
-  description = "Nom technique du projet TerminIAtor"
+  description = "Nom technique du projet Privalyse"
   type        = string
-  default     = "terminiator"
+  default     = "privalyse"
 }
 
 variable "openstack_region" {
