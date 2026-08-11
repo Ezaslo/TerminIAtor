@@ -1765,15 +1765,15 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     currentOperation.logs = [];
 
     databaseSession =
-      await sessionRepository.createSession({
-        tenantId: req.auth.tenantId,
-        createdByUserId: req.auth.userId,
-        name: finalWorkspaceName,
-        slug: finalWorkspaceSlug,
-        status: 'provisioning',
-        terraformDirectory: TERRAFORM_DIR,
-        expiresAt: sessionExpiresAt,
-      });
+    await sessionRepository.createSession({
+    tenantId: req.auth.tenantId,
+    createdByUserId: req.auth.userId,
+    name: finalWorkspaceName,
+    slug: finalWorkspaceSlug,
+    status: 'provisioning',
+    terraformDirectory: null,
+    expiresAt: sessionExpiresAt,
+  });
 
     await sessionRepository.addUserToSession(
       databaseSession.id,
@@ -1811,6 +1811,29 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       `Dossier Terraform isole prepare : ${sessionTerraformDirectory}`,
       'info'
     );
+    databaseSession =
+  await sessionRepository.updateSessionInfrastructure(
+    databaseSession.id,
+    {
+      instanceId: null,
+      publicIp: null,
+      dnsName: null,
+      accessUrl: null,
+      terraformDirectory:
+        sessionTerraformDirectory,
+    }
+  );
+
+if (!databaseSession) {
+  throw new Error(
+    'Impossible d enregistrer le dossier Terraform de la session.'
+  );
+}
+
+pushLog(
+  `Dossier Terraform enregistre en PostgreSQL : ${sessionTerraformDirectory}`,
+  'success'
+);
 
     sessionState.databaseSessionId = databaseSession.id;
     draftSessionState.databaseSessionId = databaseSession.id;
