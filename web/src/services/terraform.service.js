@@ -6,9 +6,9 @@ const {
 const config = require('../config/env');
 
 /**
- * Construit les variables d'environnement utilisées par Terraform.
+ * Construit les variables d'environnement utilisees par Terraform.
  *
- * @param {object} extraEnvironment Variables supplémentaires.
+ * @param {object} extraEnvironment Variables supplementaires.
  * @returns {object}
  */
 function buildTerraformEnvironment(
@@ -19,14 +19,31 @@ function buildTerraformEnvironment(
     ...extraEnvironment,
   };
 }
+
 /**
- * Exécute une commande Terraform.
+ * Resout le dossier dans lequel Terraform doit etre execute.
  *
- * Exemple :
- * runTerraform(['init', '-input=false'])
+ * workingDirectory est le nom utilise par Privalyse.
+ * cwd reste accepte pour compatibilite.
+ *
+ * @param {object} options Options d'execution.
+ * @returns {string}
+ */
+function resolveWorkingDirectory(
+  options = {}
+) {
+  return (
+    options.workingDirectory ||
+    options.cwd ||
+    config.terraform.directory
+  );
+}
+
+/**
+ * Execute une commande Terraform.
  *
  * @param {string[]} argumentsList Arguments Terraform.
- * @param {object} options Options d'exécution.
+ * @param {object} options Options d'execution.
  * @returns {Promise<object>}
  */
 function runTerraform(
@@ -38,10 +55,8 @@ function runTerraform(
       config.terraform.binary;
 
     const workingDirectory =
-     options.workingDirectory ||
-     options.cwd ||
-     config.terraform.directory;
- 
+      resolveWorkingDirectory(options);
+
     const extraEnvironment =
       options.extraEnvironment || {};
 
@@ -135,11 +150,8 @@ function runTerraform(
 /**
  * Lit un output Terraform au format texte.
  *
- * Exemple :
- * outputRaw('ec2_public_ip')
- *
  * @param {string} outputName Nom de l'output Terraform.
- * @param {object} options Options d'exécution.
+ * @param {object} options Options d'execution.
  * @returns {object}
  */
 function outputRaw(
@@ -150,8 +162,7 @@ function outputRaw(
     config.terraform.binary;
 
   const workingDirectory =
-  options.cwd ||
-  config.terraform.directory;
+    resolveWorkingDirectory(options);
 
   if (!terraformBinary) {
     return {
@@ -173,6 +184,9 @@ function outputRaw(
         cwd: workingDirectory,
         encoding: 'utf8',
         shell: false,
+        env: buildTerraformEnvironment(
+          options.extraEnvironment || {}
+        ),
       }
     );
   } catch (error) {
