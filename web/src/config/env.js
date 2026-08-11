@@ -305,6 +305,42 @@ const config = {
   },
 
   workspace: {
+    // Profil CPU unique pour le MVP.
+    instanceType: (
+      process.env.PRIVALYSE_CPU_FLAVOR ||
+      'a4-ram8-disk0'
+    ).trim(),
+
+    // Choix logique envoyé à Terraform.
+    aiChoice: (
+      process.env.PRIVALYSE_AI_CHOICE ||
+      'qwen-mini'
+    ).trim(),
+
+    // Modèle Ollama CPU réel.
+    ollamaModel: (
+      process.env.PRIVALYSE_OLLAMA_MODEL ||
+      'qwen2.5:0.5b'
+    ).trim(),
+
+    imageName: (
+      process.env.PRIVALYSE_IMAGE_NAME ||
+      'Ubuntu 24.04 LTS Noble Numbat'
+    ).trim(),
+
+    networkName: (
+      process.env.PRIVALYSE_NETWORK_NAME ||
+      'ext-net1'
+    ).trim(),
+
+    rootVolumeSizeGb: parseBoundedInteger(
+      process.env.PRIVALYSE_ROOT_VOLUME_GB,
+      'PRIVALYSE_ROOT_VOLUME_GB',
+      30,
+      500,
+      40
+    ),
+
     allowedCidr: (
       process.env.TF_VAR_allowed_cidr ||
       ''
