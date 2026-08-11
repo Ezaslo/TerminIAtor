@@ -3,7 +3,7 @@ data "openstack_images_image_v2" "ubuntu" {
   most_recent = true
 }
 
-data "openstack_compute_flavor_v2" "gpu" {
+data "openstack_compute_flavor_v2" "cpu" {
   name = var.instance_type
 }
 
@@ -13,29 +13,25 @@ data "openstack_networking_network_v2" "external" {
 
 locals {
   ai_catalog = {
-    qwen-mini            = "qwen2.5:0.5b"
-    llama3-1b            = "llama3.2:1b"
-    phi3-mini            = "phi3:mini"
-    phi4-mini            = "phi4-mini"
-    qwen-7b              = "qwen2.5:7b"
-    qwen-14b             = "qwen2.5:14b"
-    qwen-coder-14b       = "qwen2.5-coder:14b"
-    gpt-oss              = "gpt-oss:20b"
-    gpt-oss-20b          = "gpt-oss:20b"
-    mistral-small-24b    = "mistral-small3.2:24b"
-    dolphin3-8b          = "dolphin3:8b"
-    llama2-uncensored-7b = "llama2-uncensored:7b"
+    qwen-mini = "qwen2.5:0.5b"
+    llama3-1b = "llama3.2:1b"
   }
 
-  selected_model = lookup(local.ai_catalog, var.ai_choice, var.ollama_model)
+  selected_model = lookup(
+    local.ai_catalog,
+    var.ai_choice,
+    var.ollama_model
+  )
 }
 
 resource "openstack_compute_instance_v2" "ai_host" {
   name         = "${var.project}-${var.workspace_slug}"
-  flavor_id    = data.openstack_compute_flavor_v2.gpu.id
+  flavor_id    = data.openstack_compute_flavor_v2.cpu.id
   config_drive = true
 
-  security_groups = [data.openstack_networking_secgroup_v2.shared.name]
+  security_groups = [
+    data.openstack_networking_secgroup_v2.shared.name
+  ]
 
   block_device {
     uuid                  = data.openstack_images_image_v2.ubuntu.id
@@ -67,21 +63,22 @@ resource "openstack_compute_instance_v2" "ai_host" {
   })
 
   metadata = {
-    project       = var.project
-    workspace     = var.workspace_slug
-    managed_by    = "terraform"
-    session_ttl_h = tostring(var.session_ttl_hours)
+    project         = var.project
+    workspace       = var.workspace_slug
+    managed_by      = "terminiator"
+    compute_profile = "cpu"
+    session_ttl_h   = tostring(var.session_ttl_hours)
   }
 
   lifecycle {
     precondition {
       condition     = length(trimspace(var.image_name)) > 0
-      error_message = "image_name doit contenir le nom exact d'une image OVH."
+      error_message = "image_name doit contenir le nom exact d'une image OpenStack."
     }
 
     precondition {
       condition     = length(trimspace(var.instance_type)) > 0
-      error_message = "instance_type doit contenir le nom exact d'un flavor GPU OVH."
+      error_message = "instance_type doit contenir le nom exact d'un flavor CPU OpenStack."
     }
   }
 }
