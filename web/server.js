@@ -184,47 +184,50 @@ const sessionSecrets = {
 let ttlDestroyTimer = null;
 const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
   5 * 60 * 1000;
-const PROXY_COOKIE_NAME = 'terminiator_launch_token';
+const PROXY_COOKIE_NAME = 'privalyse_launch_token';
 
 const AI_PULL_MAP = {
   'qwen-mini': 'qwen2.5:0.5b',
-  'llama3-1b': 'llama3.2:1b',
-  'phi3-mini': 'phi3:mini',
-  'phi4-mini': 'phi4-mini',
-  'qwen-7b': 'qwen2.5:7b',
-  'qwen-14b': 'qwen2.5:14b',
-  'qwen-coder-14b': 'qwen2.5-coder:14b',
-  'gpt-oss': 'gpt-oss:20b',
-  'gpt-oss-20b': 'gpt-oss:20b',
-  'mistral-small-24b': 'mistral-small3.2:24b',
-  'dolphin3-8b': 'dolphin3:8b',
-  'llama2-uncensored-7b': 'llama2-uncensored:7b'
+  'llama3-1b': 'llama3.2:1b'
 };
 
-const AUTH_MODES = new Set(['local_admin', 'trusted_header']);
+const AUTH_MODES = new Set([
+  'local_admin',
+  'trusted_header'
+]);
 
-const DEFAULT_GPU_FLAVOR =
-  process.env.OVH_GPU_FLAVOR || 'l4-90';
+const DEFAULT_INSTANCE_TYPE = 'a4-ram8-disk0';
 
 const INSTANCE_TYPES = new Set([
-  DEFAULT_GPU_FLAVOR
+  DEFAULT_INSTANCE_TYPE
 ]);
+
 const DEFAULT_DEPLOYMENT_CONFIG = Object.freeze({
-  aiChoice: 'qwen-7b',
-  individualInstanceType: DEFAULT_GPU_FLAVOR,
-  teamInstanceType: DEFAULT_GPU_FLAVOR,
+  aiChoice: 'qwen-mini',
+
+  individualInstanceType:
+    DEFAULT_INSTANCE_TYPE,
+
+  teamInstanceType:
+    DEFAULT_INSTANCE_TYPE,
+
   allowedCidr:
-    process.env.TF_VAR_allowed_cidr || '127.0.0.1/32',
+    config.workspace.allowedCidr ||
+    '127.0.0.1/32',
+
   authMode: 'local_admin',
+
   workspaceUrl: '',
+
   trustedEmailHeader: 'X-User-Email',
   trustedNameHeader: 'X-User-Name',
   trustedGroupsHeader: 'X-User-Groups',
   trustedRoleHeader: 'X-User-Role',
+
   owuiName: 'Privalyse',
+
   owuiEmail:
-    process.env.TERMINIATOR_OWUI_EMAIL ||
-    'admin@terminiator.local'
+    config.workspace.owuiEmail
 });
 function requireAdminToken(req, res, next) {
   if (!ADMIN_TOKEN_ENABLED) {
@@ -233,7 +236,7 @@ function requireAdminToken(req, res, next) {
   }
 
   const provided =
-    req.get('X-Terminiator-Admin-Token') || '';
+    req.get('X-Privalyse-Admin-Token') || '';
 
   if (provided === ADMIN_TOKEN) {
     next();
@@ -516,13 +519,12 @@ async function destroyInfraInternal(
         '-auto-approve'
       ],
       {
-        TF_VAR_allowed_cidr:
-          process.env.TF_VAR_allowed_cidr ||
-          '127.0.0.1/32',
+       TF_VAR_allowed_cidr:
+       config.workspace.allowedCidr ||
+       '127.0.0.1/32',
 
-        TF_VAR_webui_secret_key:
-          process.env.TF_VAR_webui_secret_key ||
-          crypto.randomBytes(48).toString('hex')
+       TF_VAR_webui_secret_key:
+       crypto.randomBytes(48).toString('hex')
       },
       databaseSession.terraform_directory
     );
@@ -1413,22 +1415,17 @@ async function proxyUpgradeToOpenWebUi(
   proxyReq.end();
 }
 
-function getReadinessBudget(instanceType) {
-  const isGpuInstance = Boolean(instanceType);
-
-  if (isGpuInstance) {
-    // GPU: le premier chargement peut prendre plusieurs minutes.
-    return { maxAttempts: 120, delayMs: 5000 }; // 10 min
-  }
-
-  // CPU: initialisation et inference initiale beaucoup plus longues.
-  return { maxAttempts: 360, delayMs: 5000 }; // 30 min
+function getReadinessBudget() {
+  return {
+    maxAttempts: 360,
+    delayMs: 5000
+  };
 }
 
 async function waitForIaReady(ip, instanceType, expectedModel = null) {
   const openWebUiUrl = `http://${ip}:3000/`;
 
-  const { maxAttempts, delayMs } = getReadinessBudget(instanceType);
+  const { maxAttempts, delayMs } =  getReadinessBudget();
   const totalMinutes = Math.round((maxAttempts * delayMs) / 60000);
 
   pushLog(
@@ -1894,7 +1891,7 @@ pushLog(
           : `http://${ip}:3000`;
       pushLog(`IP publique session : ${ip}`, 'info');
       if (instanceId) {
-        pushLog(`Instance OVH : ${instanceId}`, 'info');
+        pushLog(`Instance OpenStack : ${instanceId}`,'info');
       }
       pushLog(`URL de session : ${accessUrl}`, 'success');
 
@@ -1911,7 +1908,7 @@ pushLog(
       );
 
       pushLog(
-        'Infrastructure OVH enregistrée en PostgreSQL.',
+        'Infrastructure Infomaniak/OpenStack enregistrée en PostgreSQL.',
         'success'
       );
 
@@ -2000,8 +1997,8 @@ sessionState.groupId =
     currentOperation.cancelReadiness = false;
     const message = String(e && e.message ? e.message : e);
     if (/quota|limit exceeded|overlimit|flavor/i.test(message)) {
-      const quotaHelp =
-        'Quota OVH Public Cloud insuffisant ou flavor GPU indisponible dans la region choisie.';
+    const quotaHelp =
+    'Quota Infomaniak Public Cloud insuffisant ou flavor CPU indisponible dans la region choisie.';
       pushLog(quotaHelp, 'error');
       pushLog(`Erreur deploy: ${message}`, 'error');
       return res.status(409).json({ ok: false, error: quotaHelp });
@@ -2524,7 +2521,7 @@ app.listen(PORT, () => {
   console.log(`Serveur backend demarre sur http://localhost:${PORT}`);
   console.log(`Dossier Terraform : ${TERRAFORM_DIR}`);
   if (ADMIN_TOKEN_ENABLED) {
-    console.log('Token admin active via TERMINIATOR_ADMIN_TOKEN');
+    console.log( 'Token administrateur Privalyse actif');
   } else {
     console.log('Mode sans token admin actif pour cette session');
   }
