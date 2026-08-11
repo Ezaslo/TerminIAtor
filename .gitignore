@@ -1,51 +1,150 @@
+# =========================
 # Node.js
+# =========================
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
 
-# Local configuration / secrets
+# =========================
+# Environment / secrets
+# =========================
 .env
 .env.*
 !.env.example
-.local-admin-credentials.txt
 
-# Runtime
+# Local application secrets / runtime state
+.terminiator-state.json
+*.secret
+*.secrets
+*.key
+*.pem
+
+# =========================
+# Application runtime
+# =========================
+web/.runtime/
 .runtime/
-web/.runtime
-web/terraform-sessions
+tmp/
+temp/
+*.pid
+*.pid.lock
 
-# Node
-node_modules/
-web/node_modules/
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Terraform runtime
+# =========================
+# Terraform
+# =========================
 **/.terraform/
-**/.terraform
+
 *.tfstate
 *.tfstate.*
+*.tfplan
+
 crash.log
 crash.*.log
-terraform.tfvars
+
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+.terraform.tfstate.lock.info
+
+# KEEP Terraform provider lockfiles committed
+# Do NOT ignore .terraform.lock.hcl
+
+# =========================
+# TerminIAtor Terraform sessions
+# =========================
+web/terraform-sessions/
+terraform-sessions/
+
+# Temporary/generated Terraform variable files
 *.auto.tfvars
+*.auto.tfvars.json
 
-# Keep Terraform examples and provider lockfile
-!terraform.tfvars.example
-!*.tfvars.example
+# Uncomment only if you store secrets in tfvars
+# *.tfvars
+# *.tfvars.json
 
-# OS
-.DS_Store
-Thumbs.db
+# =========================
+# OpenStack credentials
+# =========================
+openrc
+openrc.*
+*-openrc.sh
+clouds.yaml
+secure.yaml
 
-# IDE
+# =========================
+# PostgreSQL / database dumps
+# =========================
+*.sql.dump
+*.dump
+*.backup
+*.bak
+
+# =========================
+# Test coverage
+# =========================
+coverage/
+.nyc_output/
+junit.xml
+
+# =========================
+# Build / generated frontend
+# =========================
+dist/
+build/
+.cache/
+.parcel-cache/
+
+# =========================
+# IDEs / editors
+# =========================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
 
-# Logs
-*.log
-logs/
-.terminiator-state.json
+# =========================
+# OS files
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
 
-# Environment variables
-.env
-.env.local
+# =========================
+# Archives / local exports
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# =========================
+# Misc generated files
+# =========================
+*.tmp
+*.temp
+*.orig
+*.rej
