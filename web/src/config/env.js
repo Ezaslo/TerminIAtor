@@ -1,16 +1,11 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// Charge le fichier .env situé à la racine du projet.
 require('dotenv').config({
   path: path.join(__dirname, '..', '..', '..', '.env'),
   quiet: true,
 });
 
-/**
- * Convertit une variable d'environnement en nombre entier.
- * Si la valeur n'existe pas ou est invalide, utilise la valeur par défaut.
- */
 function parseInteger(value, fallback) {
   const parsedValue = Number.parseInt(value, 10);
 
@@ -21,41 +16,90 @@ function parseInteger(value, fallback) {
   return parsedValue;
 }
 
-function parseBoundedInteger(value, name, minimum, maximum, fallback) {
-  const parsed = value === undefined || value === ''
-    ? fallback
-    : Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`${name} doit être un entier entre ${minimum} et ${maximum}.`);
+function parseBoundedInteger(
+  value,
+  name,
+  minimum,
+  maximum,
+  fallback
+) {
+  const parsed =
+    value === undefined || value === ''
+      ? fallback
+      : Number(value);
+
+  if (
+    !Number.isInteger(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    throw new Error(
+      `${name} doit être un entier entre ${minimum} et ${maximum}.`
+    );
   }
+
   return parsed;
+}
+
+function readEnv(primaryName, legacyName, fallback = '') {
+  const primaryValue = process.env[primaryName];
+
+  if (
+    primaryValue !== undefined &&
+    primaryValue !== ''
+  ) {
+    return primaryValue.trim();
+  }
+
+  if (legacyName) {
+    const legacyValue = process.env[legacyName];
+
+    if (
+      legacyValue !== undefined &&
+      legacyValue !== ''
+    ) {
+      return legacyValue.trim();
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeBaseUrl(value) {
+  return value.trim().replace(/\/+$/, '');
 }
 
 function loadMfaEncryptionKey() {
   const raw = process.env.MFA_ENCRYPTION_KEY;
+
   if (!raw) {
-    throw new Error('MFA_ENCRYPTION_KEY est obligatoire et doit être un base64 de 32 octets.');
+    throw new Error(
+      'MFA_ENCRYPTION_KEY est obligatoire et doit être un base64 de 32 octets.'
+    );
   }
+
   let key;
+
   try {
     key = Buffer.from(raw, 'base64');
   } catch (_) {
-    throw new Error('MFA_ENCRYPTION_KEY doit être un base64 valide.');
+    throw new Error(
+      'MFA_ENCRYPTION_KEY doit être un base64 valide.'
+    );
   }
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || key.length !== 32) {
-    throw new Error('MFA_ENCRYPTION_KEY doit être un base64 produisant exactement 32 octets.');
+
+  if (
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(raw) ||
+    key.length !== 32
+  ) {
+    throw new Error(
+      'MFA_ENCRYPTION_KEY doit être un base64 produisant exactement 32 octets.'
+    );
   }
+
   return key;
 }
 
-/**
- * Recherche l'exécutable Terraform.
- *
- * Ordre de recherche :
- * 1. variable TERRAFORM_BIN ;
- * 2. commande "terraform" disponible dans le PATH ;
- * 3. commande "terraform.exe" disponible dans le PATH.
- */
 function resolveTerraformBinary() {
   const configuredBinary = (
     process.env.TERRAFORM_BIN || ''
@@ -85,30 +129,23 @@ function resolveTerraformBinary() {
         return candidate;
       }
     } catch (_) {
-      // Terraform n'a pas été trouvé avec ce candidat.
-      // La boucle teste automatiquement le candidat suivant.
+      // Le candidat suivant sera testé.
     }
   }
 
   return null;
 }
 
-// Port du backend TerminIAtor.
-// Valeur par défaut : 3001.
 const port = parseInteger(
   process.env.PORT,
   3001
 );
 
-// Port du proxy OpenWebUI.
-// Valeur par défaut : port du backend + 1, donc 3002.
 const proxyPort = parseInteger(
   process.env.SESSION_PROXY_PORT,
   port + 1
 );
 
-// Depuis web/src/config, on remonte de trois dossiers
-// pour atteindre la racine du projet où se trouvent les fichiers .tf.
 const terraformDirectory = path.resolve(
   __dirname,
   '..',
@@ -116,15 +153,15 @@ const terraformDirectory = path.resolve(
   'terraform'
 );
 
-// Token optionnel protégeant les routes d'administration.
-const adminToken = (
-  process.env.TERMINIATOR_ADMIN_TOKEN || ''
-).trim();
+const adminToken = readEnv(
+  'PRIVALYSE_ADMIN_TOKEN',
+  'TERMINIATOR_ADMIN_TOKEN'
+);
 
-// Liste des origines autorisées par CORS.
 const allowedOrigins = new Set(
-  (
-    process.env.TERMINIATOR_ALLOWED_ORIGINS ||
+  readEnv(
+    'PRIVALYSE_ALLOWED_ORIGINS',
+    'TERMINIATOR_ALLOWED_ORIGINS',
     `http://localhost:${port},http://127.0.0.1:${port}`
   )
     .split(',')
@@ -132,7 +169,22 @@ const allowedOrigins = new Set(
     .filter(Boolean)
 );
 
-// Toute la configuration est regroupée dans cet objet.
+const publicBaseUrl = normalizeBaseUrl(
+  readEnv(
+    'PRIVALYSE_PUBLIC_URL',
+    null,
+    `http://localhost:${port}`
+  )
+);
+
+const proxyBaseUrl = normalizeBaseUrl(
+  readEnv(
+    'PRIVALYSE_PROXY_URL',
+    null,
+    `http://localhost:${proxyPort}`
+  )
+);
+
 const config = {
   environment:
     process.env.NODE_ENV || 'development',
@@ -140,6 +192,10 @@ const config = {
   port,
 
   proxyPort,
+
+  publicBaseUrl,
+
+  proxyBaseUrl,
 
   terraform: {
     binary: resolveTerraformBinary(),
@@ -159,23 +215,30 @@ const config = {
   cors: {
     allowedOrigins,
   },
+
   auth: {
-  cookieName: (
-    process.env.AUTH_COOKIE_NAME ||
-    'terminiator_session'
-  ).trim(),
+    cookieName: (
+      process.env.AUTH_COOKIE_NAME ||
+      'terminiator_session'
+    ).trim(),
 
-  sessionDurationHours: parseInteger(
-    process.env.AUTH_SESSION_HOURS,
-    8
-  ),
+    sessionDurationHours: parseInteger(
+      process.env.AUTH_SESSION_HOURS,
+      8
+    ),
 
-  secureCookies:
-    process.env.NODE_ENV === 'production',
-},
+    secureCookies:
+      process.env.NODE_ENV === 'production',
+  },
+
   mfa: {
     encryptionKey: loadMfaEncryptionKey(),
-    issuer: (process.env.MFA_ISSUER || 'TerminIAtor').trim(),
+
+    issuer: (
+      process.env.MFA_ISSUER ||
+      'Privalyse'
+    ).trim(),
+
     challengeTtlSeconds: parseBoundedInteger(
       process.env.MFA_CHALLENGE_TTL_SECONDS,
       'MFA_CHALLENGE_TTL_SECONDS',
@@ -183,6 +246,7 @@ const config = {
       900,
       300
     ),
+
     maxAttempts: parseBoundedInteger(
       process.env.MFA_MAX_ATTEMPTS,
       'MFA_MAX_ATTEMPTS',
@@ -191,16 +255,67 @@ const config = {
       5
     ),
   },
-  database: {
-  url: (
-    process.env.DATABASE_URL || ''
-  ).trim(),
 
-  ssl:
-    (
-      process.env.DATABASE_SSL || 'false'
-    ).toLowerCase() === 'true',
-},
+  database: {
+    url: (
+      process.env.DATABASE_URL || ''
+    ).trim(),
+
+    ssl:
+      (
+        process.env.DATABASE_SSL || 'false'
+      ).toLowerCase() === 'true',
+  },
+
+  openstack: {
+    authType: (
+      process.env.OS_AUTH_TYPE ||
+      'v3applicationcredential'
+    ).trim(),
+
+    authUrl: (
+      process.env.OS_AUTH_URL ||
+      'https://api.pub1.infomaniak.cloud/identity/v3'
+    ).trim(),
+
+    applicationCredentialId: (
+      process.env.OS_APPLICATION_CREDENTIAL_ID ||
+      ''
+    ).trim(),
+
+    applicationCredentialSecret: (
+      process.env.OS_APPLICATION_CREDENTIAL_SECRET ||
+      ''
+    ).trim(),
+
+    identityApiVersion: (
+      process.env.OS_IDENTITY_API_VERSION ||
+      '3'
+    ).trim(),
+
+    interface: (
+      process.env.OS_INTERFACE ||
+      'public'
+    ).trim(),
+
+    region: (
+      process.env.OS_REGION_NAME ||
+      'dc4-a'
+    ).trim(),
+  },
+
+  workspace: {
+    allowedCidr: (
+      process.env.TF_VAR_allowed_cidr ||
+      ''
+    ).trim(),
+
+    owuiEmail: readEnv(
+      'PRIVALYSE_OWUI_EMAIL',
+      'TERMINIATOR_OWUI_EMAIL',
+      'admin@privalyse.local'
+    ),
+  },
 };
 
 module.exports = config;
