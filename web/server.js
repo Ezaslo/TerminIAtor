@@ -1464,49 +1464,126 @@ async function proxyUpgradeToOpenWebUi(
 
 function getReadinessBudget() {
   return {
-    maxAttempts: 360,
-    delayMs: 5000
+    maxAttempts: 180,
+    delayMs: 5000,
   };
 }
 
-async function waitForIaReady(ip, instanceType, expectedModel = null) {
-  const openWebUiUrl = `http://${ip}:3000/`;
+async function waitForIaReady(
+  ip,
+  expectedModel = null
+) {
+  const openWebUiUrl =
+    `http://${ip}:3000/`;
 
-  const { maxAttempts, delayMs } =  getReadinessBudget();
-  const totalMinutes = Math.round((maxAttempts * delayMs) / 60000);
+  const {
+    maxAttempts,
+    delayMs,
+  } = getReadinessBudget();
+
+  const totalMinutes = Math.round(
+    (maxAttempts * delayMs) / 60000
+  );
 
   pushLog(
-    `Test OpenWebUI et cloud-init sur ${openWebUiUrl} (fenetre d'attente: ~${totalMinutes} min, instance=${instanceType}, modele=${expectedModel || 'n/a'})`,
+    `Attente du workspace CPU Privalyse sur ${openWebUiUrl} ` +
+    `(fenetre maximale ~${totalMinutes} min, ` +
+    `modele=${expectedModel || 'n/a'})`,
     'info'
   );
-  
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt += 1
+  ) {
     if (currentOperation.cancelReadiness) {
-      pushLog('Attente readiness interrompue a la demande utilisateur', 'info');
-      return { ready: false, cancelled: true };
+      pushLog(
+        'Attente readiness interrompue a la demande utilisateur',
+        'info'
+      );
+
+      return {
+        ready: false,
+        cancelled: true,
+      };
     }
 
     try {
-      await checkHttpStatus(openWebUiUrl, [200, 301, 302, 307, 308]);
-      pushLog(`OpenWebUI et cloud-init prets sur ${openWebUiUrl}`, 'ia-ready');
-      return { ready: true, url: openWebUiUrl, cancelled: false };
-    } catch (e) {
-      pushLog(`IA pas encore prete (tentative ${attempt}/${maxAttempts})`, 'info');
+      await checkHttpStatus(
+        openWebUiUrl,
+        [200, 301, 302, 307, 308]
+      );
+
+      pushLog(
+        `Workspace Privalyse pret sur ${openWebUiUrl}`,
+        'ia-ready'
+      );
+
+      return {
+        ready: true,
+        url: openWebUiUrl,
+        cancelled: false,
+      };
+    } catch (_) {
+      // Premier essai puis environ toutes les 30 secondes.
+      if (
+        attempt === 1 ||
+        attempt % 6 === 0
+      ) {
+        const elapsedSeconds =
+          Math.round(
+            (attempt * delayMs) / 1000
+          );
+
+        pushLog(
+          `Workspace CPU pas encore pret ` +
+          `(tentative ${attempt}/${maxAttempts}, ` +
+          `~${elapsedSeconds}s ecoulees)`,
+          'info'
+        );
+      }
 
       const sliceMs = 500;
-      for (let waited = 0; waited < delayMs; waited += sliceMs) {
-        if (currentOperation.cancelReadiness) {
-          pushLog('Attente readiness interrompue a la demande utilisateur', 'info');
-          return { ready: false, cancelled: true };
+
+      for (
+        let waited = 0;
+        waited < delayMs;
+        waited += sliceMs
+      ) {
+        if (
+          currentOperation.cancelReadiness
+        ) {
+          pushLog(
+            'Attente readiness interrompue a la demande utilisateur',
+            'info'
+          );
+
+          return {
+            ready: false,
+            cancelled: true,
+          };
         }
-        await sleep(Math.min(sliceMs, delayMs - waited));
+
+        await sleep(
+          Math.min(
+            sliceMs,
+            delayMs - waited
+          )
+        );
       }
     }
   }
 
-  pushLog(`IA toujours pas prete apres ${maxAttempts} tentatives`, 'error');
-  return { ready: false, cancelled: false };
+  pushLog(
+    `Workspace Privalyse indisponible apres environ ${totalMinutes} minutes`,
+    'error'
+  );
+
+  return {
+    ready: false,
+    cancelled: false,
+  };
 }
 
 app.post(
@@ -2009,7 +2086,7 @@ sessionState.groupId =
       persistState();
 
       currentOperation.phase = 'readiness';
-      const readiness = await waitForIaReady(ip, finalInstanceType, expectedModel);
+      const readiness =await waitForIaReady(ip,expectedModel);
       if (readiness.cancelled) {
         currentOperation.type = 'idle';
         currentOperation.status = 'idle';
