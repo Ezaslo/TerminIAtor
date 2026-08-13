@@ -210,8 +210,12 @@ function validateMfaCode(req, res, next) {
 }
 function validateMfaChallenge(req, res, next) {
   const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
-  if (!/^[A-Za-z0-9_-]{40,100}$/.test(challenge)) return res.status(400).json({ error: 'Challenge MFA invalide.' });
-  req.body.challenge = challenge; return next();
+  const isValid = /^[A-Za-z0-9_-]{40,100}$/.test(challenge);
+  if (!isValid) {
+    return res.status(400).json({ error: 'Challenge MFA invalide.' });
+  }
+  req.body.challenge = challenge;
+  return next();
 }
 function validateRecoveryLogin(req, res, next) {
   const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
