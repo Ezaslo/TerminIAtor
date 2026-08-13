@@ -10,9 +10,7 @@ const invitationAcceptanceService = require(
   '../services/invitation-acceptance.service'
 );
 
-const passwordService = require(
-  '../services/password.service'
-);
+const passwordService = require('../services/password.service');
 
 /**
  * Vérifie qu'une invitation est encore valide.
