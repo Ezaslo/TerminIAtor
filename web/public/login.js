@@ -19,6 +19,7 @@
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
+    message.textContent = '';
     button.disabled = true;
 
     try {
