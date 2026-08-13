@@ -150,7 +150,7 @@ function validateDeployment(req, res, next) {
     return res.status(400).json({
       ok: false,
       error:
-        'La durée de session doit être comprise entre 1 et 24 heures.'
+        'La durée de session doit être comprise entre 1 et 168 heures.'
     });
   }
 
