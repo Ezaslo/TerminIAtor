@@ -1,7 +1,7 @@
 {
   "name": "terraform-ai-deployer",
   "version": "1.0.0",
-  "description": "Interface web pour deployer Ollama et OpenWebUI sur AWS avec Terraform",
+  "description": "Interface Privalyse pour déployer des workspaces IA avec Terraform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
