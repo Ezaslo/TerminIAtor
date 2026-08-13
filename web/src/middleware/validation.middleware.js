@@ -220,8 +220,14 @@ function validateMfaChallenge(req, res, next) {
 function validateRecoveryLogin(req, res, next) {
   const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
   const recoveryCode = typeof req.body?.recoveryCode === 'string' ? req.body.recoveryCode.trim() : '';
-  if (!/^[A-Za-z0-9_-]{40,100}$/.test(challenge) || recoveryCode.length > 32 || !recoveryCode) return res.status(400).json({ error: 'Code de récupération invalide.' });
-  req.body.challenge = challenge; req.body.recoveryCode = recoveryCode; return next();
+  const validChallenge = /^[A-Za-z0-9_-]{40,100}$/.test(challenge);
+  const validRecoveryCode = recoveryCode.length <= 32 && Boolean(recoveryCode);
+  if (!validChallenge || !validRecoveryCode) {
+    return res.status(400).json({ error: 'Code de récupération invalide.' });
+  }
+  req.body.challenge = challenge;
+  req.body.recoveryCode = recoveryCode;
+  return next();
 }
 function validateDisableMfa(req, res, next) {
   const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
