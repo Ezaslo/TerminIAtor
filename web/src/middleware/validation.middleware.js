@@ -41,6 +41,12 @@ function validateInvitationCreation(req, res, next) {
       ? req.body.role.trim().toLowerCase()
       : '';
 
+  if (!email) {
+    return res.status(400).json({
+      error: 'L’adresse email est obligatoire.'
+    });
+  }
+
   if (!EMAIL_PATTERN.test(email)) {
     return res.status(400).json({
       error: 'L’adresse email est invalide.'
