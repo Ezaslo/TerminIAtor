@@ -201,8 +201,12 @@ function validateAdminPasswordReset(req, res, next) {
 
 function validateMfaCode(req, res, next) {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
-  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Code MFA invalide.' });
-  req.body.code = code; return next();
+  const isValid = /^\d{6}$/.test(code);
+  if (!isValid) {
+    return res.status(400).json({ error: 'Code MFA invalide.' });
+  }
+  req.body.code = code;
+  return next();
 }
 function validateMfaChallenge(req, res, next) {
   const challenge = typeof req.body?.challenge === 'string' ? req.body.challenge : '';
