@@ -191,6 +191,16 @@ function validatePasswordChange(req, res, next) {
   const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
   const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
 
+  if (
+    Buffer.byteLength(currentPassword, 'utf8') > 1024 ||
+    Buffer.byteLength(newPassword, 'utf8') > 1024 ||
+    Buffer.byteLength(confirmPassword, 'utf8') > 1024
+  ) {
+    return res.status(400).json({
+      error: 'Le mot de passe fourni est invalide.'
+    });
+  }
+
   if (!currentPassword || !newPassword || !confirmPassword) {
     return res.status(400).json({ error: 'Le mot de passe actuel, le nouveau mot de passe et sa confirmation sont obligatoires.' });
   }
