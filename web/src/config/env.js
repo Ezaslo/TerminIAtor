@@ -144,8 +144,11 @@ const port = parseBoundedInteger(
   3001
 );
 
-const proxyPort = parseInteger(
+const proxyPort = parseBoundedInteger(
   process.env.SESSION_PROXY_PORT,
+  'SESSION_PROXY_PORT',
+  1,
+  65535,
   port + 1
 );
 
