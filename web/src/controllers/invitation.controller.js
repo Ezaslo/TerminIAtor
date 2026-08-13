@@ -23,17 +23,7 @@ async function getInvitationDetails(
   next
 ) {
   try {
-    const token =
-      typeof request.body?.token === 'string'
-        ? request.body.token.trim()
-        : '';
-
-    if (!token) {
-      return response.status(400).json({
-        error:
-          'Le jeton d’invitation est obligatoire.',
-      });
-    }
+    const { token } = request.body;
 
     const tokenHash =
       invitationService
