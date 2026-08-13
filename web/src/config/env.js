@@ -228,8 +228,11 @@ const config = {
       'terminiator_session'
     ).trim(),
 
-    sessionDurationHours: parseInteger(
+    sessionDurationHours: parseBoundedInteger(
       process.env.AUTH_SESSION_HOURS,
+      'AUTH_SESSION_HOURS',
+      1,
+      168,
       8
     ),
 
