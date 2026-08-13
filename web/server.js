@@ -2822,13 +2822,7 @@ app.post(
   '/api/destroy',
 
   authMiddleware.authenticate,
-
-  authMiddleware.requireRole(
-    'owner',
-    'admin'
-  ),
-
-  requireAdminToken,
+  authMiddleware.requireAuthentication,
   requireSessionAccess,
 
   async (req, res) => {
