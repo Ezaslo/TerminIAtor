@@ -10,7 +10,8 @@
   },
   "keywords": [
     "terraform",
-    "aws",
+    "openstack",
+    "privalyse",
     "ai",
     "deployment"
   ],
