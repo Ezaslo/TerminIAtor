@@ -113,6 +113,13 @@ function validateDeployment(req, res, next) {
       ? req.body.workspaceName.trim()
       : '';
 
+  if (/\r|\n/.test(workspaceName)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Le nom de session ne peut pas contenir de saut de ligne.'
+    });
+  }
+
   const sessionMode =
     typeof req.body?.sessionMode === 'string'
       ? req.body.sessionMode.trim().toLowerCase()
