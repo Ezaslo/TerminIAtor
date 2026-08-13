@@ -45,3 +45,12 @@ test('validateLogin rejects an invalid email', () => {
   assert.equal(next.called, false);
   assert.ok(res.body.error);
 });
+
+test('validateLogin rejects oversized passwords', () => {
+  const req = { body: { email: 'test@example.com', password: 'x'.repeat(1025) } };
+  const res = createResponse();
+  const next = createNext();
+  validation.validateLogin(req, res, next);
+  assert.equal(res.statusCode, 400);
+  assert.equal(next.called, false);
+});
