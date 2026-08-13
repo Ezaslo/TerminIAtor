@@ -231,8 +231,12 @@ function validateRecoveryLogin(req, res, next) {
 }
 function validateDisableMfa(req, res, next) {
   const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
-  if (!currentPassword || Buffer.byteLength(currentPassword, 'utf8') > 1024) return res.status(400).json({ error: 'Mot de passe invalide.' });
-  req.body.currentPassword = currentPassword; return validateMfaCode(req, res, next);
+  const isValid = currentPassword && Buffer.byteLength(currentPassword, 'utf8') <= 1024;
+  if (!isValid) {
+    return res.status(400).json({ error: 'Mot de passe invalide.' });
+  }
+  req.body.currentPassword = currentPassword;
+  return validateMfaCode(req, res, next);
 }
 
 module.exports = {
