@@ -35,3 +35,13 @@ test('validateLogin normalizes a valid email', () => {
   assert.equal(res.statusCode, null);
   assert.equal(req.body.email, 'test@example.com');
 });
+
+test('validateLogin rejects an invalid email', () => {
+  const req = { body: { email: 'invalid-email', password: 'valid-password' } };
+  const res = createResponse();
+  const next = createNext();
+  validation.validateLogin(req, res, next);
+  assert.equal(res.statusCode, 400);
+  assert.equal(next.called, false);
+  assert.ok(res.body.error);
+});
