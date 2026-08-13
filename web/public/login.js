@@ -11,7 +11,7 @@
   form.after(panel);
   const code = panel.querySelector('#mfa-code'); const recovery = panel.querySelector('#mfa-recovery'); const result = panel.querySelector('#mfa-message');
   function reset() { challenge = null; clearInterval(timer); panel.hidden = true; form.hidden = false; code.value = ''; recovery.value = ''; }
-  async function finish(url, body) { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Code ou challenge invalide.'); window.location.href = '/'; }
+  async function finish(url, body) { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Code ou challenge invalide.'); window.location.href = '/'; }
   panel.querySelector('#mfa-verify').onclick = async () => { try { await finish('/api/auth/mfa/verify', { challenge, code: code.value }); } catch (e) { result.textContent = e.message; } };
   panel.querySelector('#mfa-recovery-toggle').onclick = () => { recovery.hidden = !recovery.hidden; code.hidden = !recovery.hidden; panel.querySelector('#mfa-verify').textContent = recovery.hidden ? 'Vérifier' : 'Utiliser'; };
   recovery.addEventListener('change', async () => { if (!recovery.hidden) { try { await finish('/api/auth/mfa/recovery', { challenge, recoveryCode: recovery.value }); } catch (e) { result.textContent = e.message; } } });
