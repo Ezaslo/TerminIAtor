@@ -51,8 +51,7 @@ async function checkAuthentication() {
       error
     );
 
-    document.documentElement.style
-      .visibility = 'visible';
+    window.location.replace('/login.html');
   }
 }
 
