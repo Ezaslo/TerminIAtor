@@ -81,11 +81,11 @@ async function migrate() {
     );
 
     const sql = fs
-  .readFileSync(
-    filePath,
-    'utf8'
-  )
-  .replace(/^\uFEFF/, '');
+      .readFileSync(
+        filePath,
+        'utf8'
+      )
+      .replace(/^\uFEFF/, '');
 
     console.log(
       `Application de la migration : ${fileName}`
