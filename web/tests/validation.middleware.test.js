@@ -54,3 +54,13 @@ test('validateLogin rejects oversized passwords', () => {
   assert.equal(res.statusCode, 400);
   assert.equal(next.called, false);
 });
+
+test('validateInvitationToken rejects oversized lookup tokens', () => {
+  const req = { body: { token: 'a'.repeat(257) } };
+  const res = createResponse();
+  const next = createNext();
+  validation.validateInvitationToken(req, res, next);
+  assert.equal(res.statusCode, 400);
+  assert.equal(next.called, false);
+  assert.ok(res.body.error);
+});
