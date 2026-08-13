@@ -197,6 +197,13 @@ function validateDeployment(req, res, next) {
     });
   }
 
+  if (sessionMode === 'team' && groupId.length > 128) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Le groupe de session est invalide.'
+    });
+  }
+
   req.body.workspaceName = workspaceName;
   req.body.sessionMode = sessionMode;
   req.body.sessionTtlHours = sessionTtlHours;

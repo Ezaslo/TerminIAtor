@@ -64,3 +64,21 @@ test('validateInvitationToken rejects oversized lookup tokens', () => {
   assert.equal(next.called, false);
   assert.ok(res.body.error);
 });
+
+test('validateDeployment rejects oversized team groups', () => {
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'a'.repeat(129) } };
+  const res = createResponse();
+  const next = createNext();
+  validation.validateDeployment(req, res, next);
+  assert.equal(res.statusCode, 400);
+  assert.equal(next.called, false);
+});
+
+test('validateDeployment accepts a valid team group', () => {
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'group-123' } };
+  const res = createResponse();
+  const next = createNext();
+  validation.validateDeployment(req, res, next);
+  assert.equal(next.called, true);
+  assert.equal(req.body.groupId, 'group-123');
+});
