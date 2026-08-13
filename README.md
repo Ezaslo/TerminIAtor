@@ -19,3 +19,8 @@ cd web
 npm install
 npm start
 ```
+
+## Health checks
+
+- `/health/live` vérifie que l'application répond.
+- `/health/ready` vérifie que l'application et la base PostgreSQL sont disponibles.
