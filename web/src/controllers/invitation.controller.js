@@ -14,6 +14,7 @@ const passwordService = require('../services/password.service');
 
 /**
  * Vérifie qu'une invitation est encore valide.
+ * Le jeton est validé et normalisé par le middleware de route.
  */
 async function getInvitationDetails(
   request,
