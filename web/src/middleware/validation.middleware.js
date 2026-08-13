@@ -82,6 +82,12 @@ function validateInvitationAcceptance(req, res, next) {
     });
   }
 
+  if (token.length > 256) {
+    return res.status(400).json({
+      error: 'Le jeton d’invitation est invalide.'
+    });
+  }
+
   if (password.length < 12 || password.length > 200) {
     return res.status(400).json({
       error: 'Le mot de passe doit contenir entre 12 et 200 caractères.'
