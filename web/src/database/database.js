@@ -15,7 +15,7 @@ let pool = null;
 function getPool() {
   if (!config.database.url) {
     throw new Error(
-      'DATABASE_URL est manquante dans le fichier .env'
+      'DATABASE_URL est requise pour initialiser PostgreSQL.'
     );
   }
 
