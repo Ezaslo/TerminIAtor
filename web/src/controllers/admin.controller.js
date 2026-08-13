@@ -9,6 +9,7 @@ const passwordService = require(
   '../services/password.service'
 );
 const authSessionRepository = require('../repositories/auth-session.repository');
+const usageRepository = require('../repositories/usage.repository');
 
 const invitationService = require(
   '../services/invitation.service'
@@ -351,10 +352,173 @@ async function resetUserPassword(
     return next(error);
   }
 }
+/**
+ * Renvoie la consommation machine du tenant sur une période.
+ * Une session représente une seule machine facturable, même si plusieurs
+ * membres d'un groupe y accèdent.
+ */
+async function listUsage(
+  request,
+  response,
+  next
+) {
+  try {
+    const now = new Date();
+    const defaultFrom = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1
+    );
+    const defaultTo = new Date(
+      now.getFullYear(),
+      now.getMonth() + 1,
+      1
+    );
+
+    const from = request.query?.from
+      ? new Date(request.query.from)
+      : defaultFrom;
+
+    const to = request.query?.to
+      ? new Date(request.query.to)
+      : defaultTo;
+
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      to <= from
+    ) {
+      return response.status(400).json({
+        error: 'Période de consommation invalide.',
+      });
+    }
+
+    const maxRangeMs =
+      370 * 24 * 60 * 60 * 1000;
+
+    if (to.getTime() - from.getTime() > maxRangeMs) {
+      return response.status(400).json({
+        error: 'La période maximale est de 370 jours.',
+      });
+    }
+
+    const sessions =
+      await usageRepository.listTenantUsage(
+        request.auth.tenantId,
+        from.toISOString(),
+        to.toISOString()
+      );
+
+    const normalizedSessions = sessions.map((session) => {
+      const billableSeconds = Number(session.billable_seconds || 0);
+      const fallbackGroupBilling =
+        session.session_mode === 'team' &&
+        Boolean(session.group_id);
+
+      const payerType =
+        session.billing_owner_type ||
+        (fallbackGroupBilling ? 'group' : 'user');
+
+      const payerId =
+        session.billing_owner_id ||
+        (payerType === 'group'
+          ? session.group_id
+          : session.created_by_user_id);
+
+      const payerName =
+        session.billing_owner_name ||
+        (payerType === 'group'
+          ? session.group_name || 'Groupe supprimé'
+          : session.creator_email || 'Utilisateur supprimé');
+
+      return {
+        id: session.id,
+        name: session.name,
+        status: session.status,
+        payerType,
+        payerId,
+        payerName,
+        creatorEmail: session.creator_email || null,
+        groupName: session.group_name || null,
+        machineFlavor: session.machine_flavor || null,
+        machineStartedAt: session.machine_started_at,
+        readyAt: session.ready_at,
+        billingEndedAt:
+          session.billing_ended_at ||
+          session.destroyed_at ||
+          null,
+        periodStartedAt: session.period_started_at,
+        periodEndedAt: session.period_ended_at,
+        billableSeconds,
+        authorizedUserCount:
+          Number(session.authorized_user_count || 0),
+        accessCount:
+          Number(session.access_count || 0),
+        participants:
+          Array.isArray(session.participants)
+            ? session.participants
+            : [],
+      };
+    });
+
+    const payerMap = new Map();
+    let totalBillableSeconds = 0;
+    let activeMachines = 0;
+
+    for (const session of normalizedSessions) {
+      totalBillableSeconds += session.billableSeconds;
+
+      if (!session.billingEndedAt) {
+        activeMachines += 1;
+      }
+
+      const payerKey =
+        `${session.payerType}:${session.payerId || session.payerName}`;
+
+      if (!payerMap.has(payerKey)) {
+        payerMap.set(payerKey, {
+          payerType: session.payerType,
+          payerId: session.payerId || null,
+          payerName: session.payerName,
+          billableSeconds: 0,
+          sessionCount: 0,
+        });
+      }
+
+      const payer = payerMap.get(payerKey);
+      payer.billableSeconds += session.billableSeconds;
+      payer.sessionCount += 1;
+    }
+
+    const payers = Array.from(payerMap.values())
+      .sort(
+        (left, right) =>
+          right.billableSeconds - left.billableSeconds
+      );
+
+    return response.status(200).json({
+      period: {
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      totals: {
+        billableSeconds: totalBillableSeconds,
+        sessionCount: normalizedSessions.length,
+        activeMachines,
+      },
+      payers,
+      sessions: normalizedSessions,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listUsers,
   deleteUser,
   resetUserPassword,
   listInvitations,
   createInvitation,
+  listUsage,
 };

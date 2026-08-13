@@ -560,6 +560,76 @@
       text-align: center;
     }
 
+    .usage-toolbar {
+      display: grid;
+      grid-template-columns: minmax(190px, 240px) minmax(190px, 240px) auto;
+      align-items: end;
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+
+    .usage-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .usage-card {
+      padding: 18px;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      background: rgba(2, 132, 199, 0.08);
+    }
+
+    .usage-card-label {
+      display: block;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .usage-card-value {
+      display: block;
+      margin-top: 7px;
+      color: #e0f2fe;
+      font-size: 25px;
+      font-weight: 900;
+    }
+
+    .usage-section-title {
+      margin: 24px 0 12px;
+      font-size: 17px;
+    }
+
+    .usage-payer-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border: 1px solid var(--border-light);
+      border-radius: 999px;
+      color: var(--text-secondary);
+      background: rgba(15, 23, 42, 0.9);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .usage-participants {
+      max-width: 320px;
+      white-space: normal;
+      line-height: 1.45;
+    }
+
+    .usage-note {
+      margin: 14px 0 0;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
     @media (max-width: 850px) {
       body {
         padding: 20px;
@@ -578,7 +648,8 @@
       .group-form,
       .member-form,
       .password-form,
-      .password-reset-grid {
+      .password-reset-grid,
+      .usage-toolbar {
         grid-template-columns: 1fr;
       }
       .password-reset-actions { flex-direction: column; }
@@ -741,6 +812,126 @@
           0
         </strong>
       </article>
+    </section>
+
+    <section
+      id="usage-panel"
+      class="panel admin-only"
+      aria-labelledby="usage-panel-title"
+    >
+      <div class="panel-header">
+        <div>
+          <h2 id="usage-panel-title">Consommation & facturation</h2>
+          <p>
+            Une session correspond à une seule machine facturable.
+            Une session individuelle est imputée à son créateur ; une session
+            d'équipe est imputée une seule fois au groupe, quel que soit le
+            nombre de participants.
+          </p>
+        </div>
+      </div>
+
+      <div class="usage-toolbar">
+        <div class="field">
+          <label for="usage-month">Période</label>
+          <input id="usage-month" type="month">
+        </div>
+
+        <div class="field">
+          <label for="usage-hourly-rate">Tarif facturé par heure (€)</label>
+          <input
+            id="usage-hourly-rate"
+            type="number"
+            min="0"
+            step="0.01"
+            inputmode="decimal"
+            placeholder="Ex. 0,50"
+          >
+          <p class="field-help">
+            Ce tarif sert uniquement à calculer une estimation à l'écran.
+          </p>
+        </div>
+
+        <button
+          id="usage-refresh"
+          class="primary-button"
+          type="button"
+        >
+          Actualiser
+        </button>
+      </div>
+
+      <div class="usage-cards">
+        <article class="usage-card">
+          <span class="usage-card-label">Heures machine</span>
+          <strong id="usage-total-hours" class="usage-card-value">0 h</strong>
+        </article>
+
+        <article class="usage-card">
+          <span class="usage-card-label">Sessions facturables</span>
+          <strong id="usage-session-count" class="usage-card-value">0</strong>
+        </article>
+
+        <article class="usage-card">
+          <span class="usage-card-label">Machines actives</span>
+          <strong id="usage-active-count" class="usage-card-value">0</strong>
+        </article>
+
+        <article class="usage-card">
+          <span class="usage-card-label">Montant estimé</span>
+          <strong id="usage-estimated-amount" class="usage-card-value">—</strong>
+        </article>
+      </div>
+
+      <h3 class="usage-section-title">Facturation par utilisateur ou groupe</h3>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Facturé à</th>
+              <th>Type</th>
+              <th>Sessions</th>
+              <th>Heures machine</th>
+              <th>Estimation</th>
+            </tr>
+          </thead>
+          <tbody id="usage-payers-body">
+            <tr>
+              <td class="empty-row" colspan="5">Chargement de la consommation…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="usage-section-title">Détail des machines</h3>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Espace</th>
+              <th>Facturé à</th>
+              <th>Utilisateurs ayant ouvert</th>
+              <th>Début</th>
+              <th>Fin</th>
+              <th>Durée</th>
+              <th>Machine</th>
+            </tr>
+          </thead>
+          <tbody id="usage-sessions-body">
+            <tr>
+              <td class="empty-row" colspan="7">Chargement des machines…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="usage-note">
+        Les participants sont informatifs : ils permettent de savoir qui a
+        réellement ouvert un espace. Ils ne multiplient jamais les heures
+        facturables de la machine.
+      </p>
+
+      <p id="usage-message" class="message" role="status" aria-live="polite"></p>
     </section>
 
     <section class="panel admin-only">

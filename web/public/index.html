@@ -1,5 +1,4 @@
-﻿ 
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8" />
@@ -49,7 +48,7 @@
                 <h2>Mode de travail</h2>
 
                 <p class="helper-text">
-                    Choisis si cet espace est réservé à ton usage ou partagé avec une equipe.
+                    Choisis si cet espace est réservé à ton usage ou partagé avec une équipe.
                 </p>
 
                 <div class="credentials-form">
@@ -75,7 +74,7 @@
                         />
 
                         <span>
-                            <strong>A l'equipe</strong><br />
+                            <strong>À l'équipe</strong><br />
                             <small>Un espace partagé avec un groupe autorisé.</small>
                         </span>
                     </label>
@@ -122,9 +121,6 @@
                 </div>
             </section>
 
-           
-              
-
             <section class="status-panel">
                 <h2>Résumé</h2>
 
@@ -166,7 +162,53 @@
         </main>
     </div>
 
+    <div
+        id="deleteModal"
+        class="modal-backdrop"
+        aria-hidden="true"
+    >
+        <div
+            class="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deleteModalTitle"
+            aria-describedby="deleteModalDescription"
+        >
+            <div class="modal-icon" aria-hidden="true">!</div>
+
+            <h2 id="deleteModalTitle">
+                Supprimer l’espace ?
+            </h2>
+
+            <p id="deleteModalDescription">
+                Cette action supprimera définitivement l’espace ainsi que toutes
+                les données qui lui sont associées.
+            </p>
+
+            <p class="modal-warning">
+                Cette action est irréversible.
+            </p>
+
+            <div class="modal-actions">
+                <button
+                    id="cancelDeleteBtn"
+                    type="button"
+                    class="modal-cancel-btn"
+                >
+                    Annuler
+                </button>
+
+                <button
+                    id="confirmDeleteBtn"
+                    type="button"
+                    class="modal-delete-btn"
+                >
+                    Supprimer l’espace
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>
- 

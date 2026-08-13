@@ -229,7 +229,9 @@ async function createSession(session) {
         slug,
         status,
         terraform_directory,
-        expires_at
+        expires_at,
+        session_mode,
+        group_id
       )
       VALUES (
         $1,
@@ -239,7 +241,9 @@ async function createSession(session) {
         $5,
         $6,
         $7,
-        $8
+        $8,
+        $9,
+        $10
       )
       RETURNING *
     `,
@@ -252,6 +256,8 @@ async function createSession(session) {
       session.status || 'queued',
       session.terraformDirectory || null,
       session.expiresAt || null,
+      session.sessionMode || 'individual',
+      session.groupId || null,
     ]
   );
 
@@ -281,7 +287,13 @@ async function listSessionsByTenantId(tenantId) {
         created_at,
         updated_at,
         expires_at,
-        destroyed_at
+        destroyed_at,
+        session_mode,
+        group_id,
+        machine_started_at,
+        ready_at,
+        billing_ended_at,
+        machine_flavor
       FROM sessions
       WHERE tenant_id = $1
       ORDER BY created_at DESC
@@ -331,6 +343,12 @@ async function listSessionsForUser(
         sessions.updated_at,
         sessions.expires_at,
         sessions.destroyed_at,
+        sessions.session_mode,
+        sessions.group_id,
+        sessions.machine_started_at,
+        sessions.ready_at,
+        sessions.billing_ended_at,
+        sessions.machine_flavor,
         COUNT(all_members.user_id)::int AS member_count
       FROM sessions
       INNER JOIN session_users AS user_access
@@ -383,7 +401,13 @@ async function getSessionById(sessionId) {
         created_at,
         updated_at,
         expires_at,
-        destroyed_at
+        destroyed_at,
+        session_mode,
+        group_id,
+        machine_started_at,
+        ready_at,
+        billing_ended_at,
+        machine_flavor
       FROM sessions
       WHERE id = $1
       LIMIT 1
@@ -488,7 +512,13 @@ async function listExpiredSessions(limit = 10) {
         created_at,
         updated_at,
         expires_at,
-        destroyed_at
+        destroyed_at,
+        session_mode,
+        group_id,
+        machine_started_at,
+        ready_at,
+        billing_ended_at,
+        machine_flavor
       FROM sessions
       WHERE
         expires_at IS NOT NULL
@@ -513,6 +543,7 @@ async function markSessionDestroyed(sessionId) {
       SET
         status = 'destroyed',
         destroyed_at = NOW(),
+        billing_ended_at = COALESCE(billing_ended_at, NOW()),
         updated_at = NOW()
       WHERE id = $1
       RETURNING *

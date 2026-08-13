@@ -21,6 +21,7 @@ const {
 } = require('./src/middleware/error-handler');
 
 const groupRepository = require('./src/repositories/group.repository');
+const usageRepository = require('./src/repositories/usage.repository');
 const config = require('./src/config/env');
 const sessionRepository = require(
   './src/repositories/session.repository'
@@ -961,6 +962,23 @@ app.post(
 
       await assertLocalAdminReady(sessionId);
       await ensureOpenWebUiJwt(sessionId);
+
+      try {
+        await usageRepository.recordAccess(
+          sessionId,
+          req.auth.userId
+        );
+      } catch (usageError) {
+        pushLog(
+          `Suivi d acces non enregistre pour ${sessionId}: ${usageError.message}`,
+          'error',
+          {
+            sessionId,
+            userId: req.auth.userId,
+            tenantId: req.auth.tenantId,
+          }
+        );
+      }
 
 const launchToken =
   crypto.randomBytes(24).toString('base64url');
@@ -2110,15 +2128,16 @@ if (currentOperation.status === 'running') {
 }
 
 let groupMembers = [];
+let selectedGroup = null;
 
 if (sessionMode === 'team') {
-  const group =
+  selectedGroup =
     await groupRepository.findGroupById(
       groupId,
       req.auth.tenantId
     );
 
-  if (!group) {
+  if (!selectedGroup) {
     return res.status(400).json({
       ok: false,
       error:
@@ -2128,7 +2147,7 @@ if (sessionMode === 'team') {
 
   groupMembers =
     await groupRepository.listGroupMembers(
-      group.id,
+      selectedGroup.id,
       req.auth.tenantId
     );
 
@@ -2310,7 +2329,27 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     status: 'provisioning',
     terraformDirectory: null,
     expiresAt: sessionExpiresAt,
+    sessionMode,
+    groupId:
+      sessionMode === 'team'
+        ? groupId.trim()
+        : null,
   });
+
+    await usageRepository.setBillingOwnerSnapshot(
+      databaseSession.id,
+      sessionMode === 'team'
+        ? {
+            type: 'group',
+            id: selectedGroup.id,
+            name: selectedGroup.name,
+          }
+        : {
+            type: 'user',
+            id: req.auth.userId,
+            name: req.auth.email,
+          }
+    );
 
     await sessionRepository.addUserToSession(
       databaseSession.id,
@@ -2473,6 +2512,16 @@ pushLog(
       TF_VAR_webui_secret_key: finalWebuiSecretKey
     }, sessionTerraformDirectory);
 
+    await usageRepository.markMachineStarted(
+      databaseSession.id,
+      finalInstanceType
+    );
+
+    pushLog(
+      `Compteur de consommation machine demarre pour la session ${databaseSession.id}.`,
+      'info'
+    );
+
     const ipOutput = terraformOutputRaw(
       'instance_public_ip',
       sessionTerraformDirectory
@@ -2620,6 +2669,10 @@ persistState();
       await sessionRepository.updateSessionStatus(
         databaseSession.id,
         'ready'
+      );
+
+      await usageRepository.markReady(
+        databaseSession.id
       );
     }
     currentOperation.type = 'idle';

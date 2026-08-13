@@ -7,6 +7,17 @@ const usersCount = document.getElementById('users-count');
 const groupsCount = document.getElementById('groups-count');
 const invitationsCount = document.getElementById('invitations-count');
 
+const usageMonthInput = document.getElementById('usage-month');
+const usageHourlyRateInput = document.getElementById('usage-hourly-rate');
+const usageRefreshButton = document.getElementById('usage-refresh');
+const usageTotalHours = document.getElementById('usage-total-hours');
+const usageSessionCount = document.getElementById('usage-session-count');
+const usageActiveCount = document.getElementById('usage-active-count');
+const usageEstimatedAmount = document.getElementById('usage-estimated-amount');
+const usagePayersBody = document.getElementById('usage-payers-body');
+const usageSessionsBody = document.getElementById('usage-sessions-body');
+const usageMessage = document.getElementById('usage-message');
+
 const pageMessage = document.getElementById('page-message');
 
 const invitationForm = document.getElementById('invitation-form');
@@ -49,6 +60,7 @@ document.getElementById('mfa-disable-button').addEventListener('click', async ()
 
 let authenticatedUser = null;
 let tenantUsers = [];
+let currentUsageData = null;
 
 function formatDate(value) {
   if (!value) return '—';
@@ -510,6 +522,274 @@ async function refreshGroups() {
   return data;
 }
 
+function formatUsageDuration(seconds) {
+  const normalizedSeconds = Math.max(
+    0,
+    Number(seconds || 0)
+  );
+
+  const totalMinutes = Math.ceil(
+    normalizedSeconds / 60
+  );
+
+  const hours = Math.floor(
+    totalMinutes / 60
+  );
+
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes} min`;
+  }
+
+  if (minutes === 0) {
+    return `${hours} h`;
+  }
+
+  return `${hours} h ${String(minutes).padStart(2, '0')}`;
+}
+
+function formatUsageAmount(value) {
+  return new Intl.NumberFormat(
+    'fr-FR',
+    {
+      style: 'currency',
+      currency: 'EUR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  ).format(value);
+}
+
+function getHourlyRate() {
+  const rate = Number.parseFloat(
+    usageHourlyRateInput?.value || ''
+  );
+
+  return Number.isFinite(rate) && rate >= 0
+    ? rate
+    : null;
+}
+
+function setDefaultUsageMonth() {
+  if (!usageMonthInput || usageMonthInput.value) {
+    return;
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(
+    now.getMonth() + 1
+  ).padStart(2, '0');
+
+  usageMonthInput.value = `${year}-${month}`;
+}
+
+function getUsagePeriod() {
+  setDefaultUsageMonth();
+
+  const value = usageMonthInput?.value || '';
+  const match = value.match(/^(\d{4})-(\d{2})$/);
+
+  if (!match) {
+    throw new Error(
+      'Sélectionne un mois de consommation valide.'
+    );
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+
+  const from = new Date(
+    year,
+    monthIndex,
+    1,
+    0,
+    0,
+    0,
+    0
+  );
+
+  const to = new Date(
+    year,
+    monthIndex + 1,
+    1,
+    0,
+    0,
+    0,
+    0
+  );
+
+  return {
+    from: from.toISOString(),
+    to: to.toISOString(),
+  };
+}
+
+function buildUsageUrl() {
+  const period = getUsagePeriod();
+  const params = new URLSearchParams({
+    from: period.from,
+    to: period.to,
+  });
+
+  return `/api/admin/usage?${params.toString()}`;
+}
+
+function displayUsage(data) {
+  currentUsageData = data;
+
+  const totals = data?.totals || {};
+  const payers = Array.isArray(data?.payers)
+    ? data.payers
+    : [];
+  const sessions = Array.isArray(data?.sessions)
+    ? data.sessions
+    : [];
+  const hourlyRate = getHourlyRate();
+
+  const totalSeconds = Number(
+    totals.billableSeconds || 0
+  );
+
+  usageTotalHours.textContent =
+    formatUsageDuration(totalSeconds);
+  usageSessionCount.textContent = String(
+    totals.sessionCount || 0
+  );
+  usageActiveCount.textContent = String(
+    totals.activeMachines || 0
+  );
+  usageEstimatedAmount.textContent =
+    hourlyRate === null
+      ? '—'
+      : formatUsageAmount(
+          (totalSeconds / 3600) * hourlyRate
+        );
+
+  usagePayersBody.replaceChildren();
+
+  if (payers.length === 0) {
+    const row = document.createElement('tr');
+    const cell = createCell(
+      'Aucune consommation machine sur cette période.',
+      'empty-row'
+    );
+    cell.colSpan = 5;
+    row.appendChild(cell);
+    usagePayersBody.appendChild(row);
+  } else {
+    payers.forEach((payer) => {
+      const row = document.createElement('tr');
+      const payerName = createCell(payer.payerName || '—');
+      const payerType = document.createElement('td');
+      const badge = document.createElement('span');
+      badge.className = 'usage-payer-badge';
+      badge.textContent =
+        payer.payerType === 'group'
+          ? 'Groupe'
+          : 'Utilisateur';
+      payerType.appendChild(badge);
+
+      const seconds = Number(
+        payer.billableSeconds || 0
+      );
+
+      const estimate =
+        hourlyRate === null
+          ? '—'
+          : formatUsageAmount(
+              (seconds / 3600) * hourlyRate
+            );
+
+      row.append(
+        payerName,
+        payerType,
+        createCell(String(payer.sessionCount || 0)),
+        createCell(formatUsageDuration(seconds)),
+        createCell(estimate)
+      );
+
+      usagePayersBody.appendChild(row);
+    });
+  }
+
+  usageSessionsBody.replaceChildren();
+
+  if (sessions.length === 0) {
+    const row = document.createElement('tr');
+    const cell = createCell(
+      'Aucune machine facturable sur cette période.',
+      'empty-row'
+    );
+    cell.colSpan = 7;
+    row.appendChild(cell);
+    usageSessionsBody.appendChild(row);
+  } else {
+    sessions.forEach((session) => {
+      const row = document.createElement('tr');
+      const participants = Array.isArray(session.participants)
+        ? session.participants
+        : [];
+
+      const participantLabel = participants.length > 0
+        ? participants
+            .map((participant) => participant.email)
+            .filter(Boolean)
+            .join(', ')
+        : 'Aucune ouverture enregistrée';
+
+      const participantCell = createCell(
+        participantLabel,
+        'usage-participants'
+      );
+
+      if (session.accessCount > 0) {
+        participantCell.title =
+          `${session.accessCount} ouverture(s) enregistrée(s)`;
+      }
+
+      row.append(
+        createCell(session.name || '—'),
+        createCell(session.payerName || '—'),
+        participantCell,
+        createCell(formatDate(session.periodStartedAt)),
+        createCell(
+          session.billingEndedAt
+            ? formatDate(session.periodEndedAt)
+            : 'En cours'
+        ),
+        createCell(
+          formatUsageDuration(session.billableSeconds)
+        ),
+        createCell(session.machineFlavor || '—')
+      );
+
+      usageSessionsBody.appendChild(row);
+    });
+  }
+
+  setMessage(usageMessage, '');
+}
+
+async function refreshUsage() {
+  if (!usageMessage) {
+    return null;
+  }
+
+  setMessage(
+    usageMessage,
+    'Chargement de la consommation…'
+  );
+
+  const data = await requestJson(
+    buildUsageUrl()
+  );
+
+  displayUsage(data);
+  return data;
+}
+
 async function loadAdministrationPage(authentication) {
   authenticatedUser = authentication?.user || null;
 
@@ -538,6 +818,16 @@ async function loadAdministrationPage(authentication) {
     displayUsers(usersData);
     displayInvitations(invitationsData);
     displayGroups(groupsData);
+
+    try {
+      await refreshUsage();
+    } catch (usageError) {
+      setMessage(
+        usageMessage,
+        usageError.message,
+        'error'
+      );
+    }
   } catch (error) {
     displayPageMessage(error.message, 'error');
   }
@@ -668,6 +958,53 @@ groupForm.addEventListener('submit', async (event) => {
     groupSubmit.textContent = 'Créer le groupe';
   }
 });
+
+setDefaultUsageMonth();
+
+usageRefreshButton?.addEventListener(
+  'click',
+  async () => {
+    usageRefreshButton.disabled = true;
+    usageRefreshButton.textContent = 'Actualisation…';
+
+    try {
+      await refreshUsage();
+    } catch (error) {
+      setMessage(
+        usageMessage,
+        error.message,
+        'error'
+      );
+    } finally {
+      usageRefreshButton.disabled = false;
+      usageRefreshButton.textContent = 'Actualiser';
+    }
+  }
+);
+
+usageMonthInput?.addEventListener(
+  'change',
+  async () => {
+    try {
+      await refreshUsage();
+    } catch (error) {
+      setMessage(
+        usageMessage,
+        error.message,
+        'error'
+      );
+    }
+  }
+);
+
+usageHourlyRateInput?.addEventListener(
+  'input',
+  () => {
+    if (currentUsageData) {
+      displayUsage(currentUsageData);
+    }
+  }
+);
 
 document.addEventListener('terminiator:authenticated', (event) => {
   loadAdministrationPage(event.detail);

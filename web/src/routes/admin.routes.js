@@ -15,6 +15,19 @@ const validationMiddleware = require(
 );
 
 router.get(
+  '/usage',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  adminController.listUsage
+);
+
+router.get(
   '/users',
 
   authMiddleware.authenticate,

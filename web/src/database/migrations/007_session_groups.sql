@@ -1,8 +1,13 @@
 ﻿ALTER TABLE sessions
-  ADD COLUMN session_mode VARCHAR(20) NOT NULL DEFAULT 'individual';
+  ADD COLUMN IF NOT EXISTS session_mode VARCHAR(20)
+  NOT NULL DEFAULT 'individual';
 
 ALTER TABLE sessions
-  ADD COLUMN group_id UUID;
+  ADD COLUMN IF NOT EXISTS group_id UUID;
+
+
+ALTER TABLE sessions
+  DROP CONSTRAINT IF EXISTS sessions_session_mode_check;
 
 ALTER TABLE sessions
   ADD CONSTRAINT sessions_session_mode_check
@@ -13,16 +18,22 @@ ALTER TABLE sessions
     )
   );
 
+
+ALTER TABLE sessions
+  DROP CONSTRAINT IF EXISTS fk_sessions_group;
+
 ALTER TABLE sessions
   ADD CONSTRAINT fk_sessions_group
   FOREIGN KEY (group_id)
   REFERENCES groups(id)
   ON DELETE SET NULL;
 
-CREATE INDEX idx_sessions_group_id
+
+CREATE INDEX IF NOT EXISTS idx_sessions_group_id
   ON sessions(group_id);
 
-CREATE UNIQUE INDEX uq_sessions_active_team_group
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_active_team_group
   ON sessions(group_id)
   WHERE
     session_mode = 'team'

@@ -80,28 +80,25 @@ async function migrate() {
       fileName
     );
 
-    const sql = fs.readFileSync(
-      filePath,
-      'utf8'
-    );
+    const sql = fs
+  .readFileSync(
+    filePath,
+    'utf8'
+  )
+  .replace(/^\uFEFF/, '');
 
     console.log(
       `Application de la migration : ${fileName}`
     );
 
-    const statements = sql
-      .split(';')
-      .map((statement) => statement.trim())
-      .filter(Boolean);
+    
 
     const client = await database.getClient();
 
     try {
       await client.query('BEGIN');
 
-      for (const statement of statements) {
-        await client.query(statement);
-      }
+     await client.query(sql);
 
       await client.query(
         `

@@ -571,81 +571,198 @@ function setupDeployButton() {
 }
 
 function setupDestroyButton() {
-  const destroyBtn = document.getElementById('destroyBtn');
+  const destroyBtn =
+    document.getElementById('destroyBtn');
 
-  if (!destroyBtn) return;
+  const modal =
+    document.getElementById('deleteModal');
 
-  destroyBtn.addEventListener('click', async () => {
-    if (isDestroying) return;
+  const cancelBtn =
+    document.getElementById('cancelDeleteBtn');
 
-    const confirmed = window.confirm(
-      'L’espace et toutes ses données seront supprimés. Continuer ?'
+  const confirmBtn =
+    document.getElementById('confirmDeleteBtn');
+
+  if (
+    !destroyBtn ||
+    !modal ||
+    !cancelBtn ||
+    !confirmBtn
+  ) {
+    return;
+  }
+
+  function openModal() {
+    modal.classList.add('visible');
+    modal.setAttribute(
+      'aria-hidden',
+      'false'
     );
 
-    if (!confirmed) return;
+    document.body.style.overflow = 'hidden';
+    confirmBtn.focus();
+  }
 
-    resetUiForNewOperation('destroy');
+  function closeModal() {
+    modal.classList.remove('visible');
+    modal.setAttribute(
+      'aria-hidden',
+      'true'
+    );
 
-    isDestroying = true;
-    destroyBtn.disabled = true;
-    destroyBtn.classList.add('running');
-    destroyBtn.textContent = 'Suppression en cours...';
+    document.body.style.overflow = '';
+    destroyBtn.focus();
+  }
 
-    addLog('Suppression de l’espace demandée.', 'info');
-
-    try {
-      if (!currentSessionId) {
-        throw new Error(
-          'Aucune session accessible à supprimer.'
-        );
-      }
-
-      const response = await fetch('/api/destroy', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          sessionId: currentSessionId
-        })
-      });
-
-      if (!response.ok) {
-        let errorText = 'La suppression a échoué.';
-
-        try {
-          const data = await response.json();
-
-          if (data?.error) {
-            errorText = data.error;
-          }
-        } catch (_) {
-          // La réponse du serveur n’est pas au format JSON.
-        }
-
-        errorText = humanizeErrorMessage(errorText);
-        addLog(`Erreur de suppression : ${errorText}`, 'error');
-        window.alert(errorText);
+  destroyBtn.addEventListener(
+    'click',
+    () => {
+      if (isDestroying) {
         return;
       }
 
-      lastSubmittedSession = null;
-      currentSessionId = null;
+      if (!currentSessionId) {
+        addLog(
+          'Aucune session accessible à supprimer.',
+          'error'
+        );
+        return;
+      }
 
-      addLog('La suppression de l’espace a été lancée.', 'success');
-      window.setTimeout(refreshSessionSummary, 1000);
-    } catch (error) {
+      openModal();
+    }
+  );
+
+  cancelBtn.addEventListener(
+    'click',
+    closeModal
+  );
+
+  modal.addEventListener(
+    'click',
+    (event) => {
+      if (event.target === modal) {
+        closeModal();
+      }
+    }
+  );
+
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (
+        event.key === 'Escape' &&
+        modal.classList.contains('visible')
+      ) {
+        closeModal();
+      }
+    }
+  );
+
+  confirmBtn.addEventListener(
+    'click',
+    async () => {
+      if (isDestroying) {
+        return;
+      }
+
+      if (!currentSessionId) {
+        closeModal();
+
+        addLog(
+          'Aucune session accessible à supprimer.',
+          'error'
+        );
+
+        return;
+      }
+
+      closeModal();
+      resetUiForNewOperation('destroy');
+
+      isDestroying = true;
+      destroyBtn.disabled = true;
+      destroyBtn.classList.add('running');
+      destroyBtn.textContent =
+        'Suppression en cours...';
+
       addLog(
-        `Erreur de connexion au serveur : ${error.message}`,
-        'error'
+        'Suppression de l’espace demandée.',
+        'info'
       );
 
-      window.alert('Impossible de contacter le serveur.');
-    } finally {
-      isDestroying = false;
-      destroyBtn.disabled = false;
-      destroyBtn.classList.remove('running');
-      destroyBtn.textContent = 'Supprimer l’espace';
+      try {
+        const response = await fetch(
+          '/api/destroy',
+          {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({
+              sessionId:
+                currentSessionId
+            })
+          }
+        );
+
+        if (!response.ok) {
+          let errorText =
+            'La suppression a échoué.';
+
+          try {
+            const data =
+              await response.json();
+
+            if (data?.error) {
+              errorText =
+                data.error;
+            }
+          } catch (_) {
+            // La réponse du serveur n’est pas au format JSON.
+          }
+
+          errorText =
+            humanizeErrorMessage(
+              errorText
+            );
+
+          addLog(
+            `Erreur de suppression : ${errorText}`,
+            'error'
+          );
+
+          return;
+        }
+
+        lastSubmittedSession = null;
+        currentSessionId = null;
+
+        addLog(
+          'L’espace et ses données ont été supprimés.',
+          'success'
+        );
+
+        window.setTimeout(
+          refreshSessionSummary,
+          1000
+        );
+      } catch (error) {
+        addLog(
+          `Erreur de connexion au serveur : ${error.message}`,
+          'error'
+        );
+      } finally {
+        isDestroying = false;
+
+        destroyBtn.disabled = false;
+        destroyBtn.classList.remove(
+          'running'
+        );
+
+        destroyBtn.textContent =
+          'Supprimer l’espace';
+      }
     }
-  });
+  );
 }
 
 function setupOpenSessionButton() {
