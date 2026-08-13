@@ -12,7 +12,7 @@ function validateLogin(req, res, next) {
       ? req.body.password
       : '';
 
-  if (!email || !password) {
+  if (!email || !password || Buffer.byteLength(password, 'utf8') > 1024) {
     return res.status(400).json({
       error: 'L’email et le mot de passe sont obligatoires.'
     });
