@@ -24,3 +24,7 @@ npm start
 
 - `/health/live` vérifie que l'application répond.
 - `/health/ready` vérifie que l'application et la base PostgreSQL sont disponibles.
+
+## Validation locale
+
+Depuis le répertoire `web`, exécutez `npm run check` pour vérifier la syntaxe JavaScript.
