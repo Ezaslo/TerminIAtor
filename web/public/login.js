@@ -16,5 +16,21 @@
   panel.querySelector('#mfa-recovery-toggle').onclick = () => { recovery.hidden = !recovery.hidden; code.hidden = !recovery.hidden; panel.querySelector('#mfa-verify').textContent = recovery.hidden ? 'Vérifier' : 'Utiliser'; };
   recovery.addEventListener('change', async () => { if (!recovery.hidden) { try { await finish('/api/auth/mfa/recovery', { challenge, recoveryCode: recovery.value }); } catch (e) { result.textContent = e.message; } } });
   panel.querySelector('#mfa-back').onclick = reset;
-  form.addEventListener('submit', async (event) => { event.preventDefault(); event.stopImmediatePropagation(); button.disabled = true; const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ email: document.getElementById('email').value.trim(), password: document.getElementById('password').value }) }); const data = await response.json().catch(() => ({})); button.disabled = false; if (response.status === 202 && data.mfaRequired) { challenge = data.challenge; form.hidden = true; panel.hidden = false; let remaining = data.expiresIn; timer = setInterval(() => { remaining -= 1; if (remaining <= 0) { result.textContent = 'Le challenge a expiré.'; reset(); } }, 1000); return; } if (!response.ok) { message.textContent = data.error || 'Connexion impossible.'; return; } window.location.href = '/'; }, true);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    button.disabled = true;
+
+    try {
+      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ email: document.getElementById('email').value.trim(), password: document.getElementById('password').value }) });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 202 && data.mfaRequired) { challenge = data.challenge; form.hidden = true; panel.hidden = false; let remaining = data.expiresIn; timer = setInterval(() => { remaining -= 1; if (remaining <= 0) { result.textContent = 'Le challenge a expiré.'; reset(); } }, 1000); return; }
+      if (!response.ok) { message.textContent = data.error || 'Connexion impossible.'; return; }
+      window.location.href = '/';
+    } catch (error) {
+      message.textContent = 'Connexion impossible.';
+    } finally {
+      button.disabled = false;
+    }
+  }, true);
 })();
