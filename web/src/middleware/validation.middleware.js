@@ -171,7 +171,10 @@ function validateDeployment(req, res, next) {
   req.body.workspaceName = workspaceName;
   req.body.sessionMode = sessionMode;
   req.body.sessionTtlHours = sessionTtlHours;
-  req.body.groupId = groupId;
+  req.body.groupId =
+    sessionMode === 'team'
+      ? groupId
+      : null;
 
   return next();
 }
