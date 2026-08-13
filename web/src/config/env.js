@@ -136,8 +136,11 @@ function resolveTerraformBinary() {
   return null;
 }
 
-const port = parseInteger(
+const port = parseBoundedInteger(
   process.env.PORT,
+  'PORT',
+  1,
+  65535,
   3001
 );
 
