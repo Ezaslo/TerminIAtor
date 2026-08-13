@@ -75,32 +75,7 @@ async function acceptInvitation(
   next
 ) {
   try {
-    const token =
-      typeof request.body?.token === 'string'
-        ? request.body.token.trim()
-        : '';
-
-    const password =
-      typeof request.body?.password === 'string'
-        ? request.body.password
-        : '';
-
-    if (!token) {
-      return response.status(400).json({
-        error:
-          'Le jeton d’invitation est obligatoire.',
-      });
-    }
-
-    if (
-      password.length < 8 ||
-      password.length > 200
-    ) {
-      return response.status(400).json({
-        error:
-          'Le mot de passe doit contenir entre 8 et 200 caractères.',
-      });
-    }
+    const { token, password } = request.body;
 
     const tokenHash =
       invitationService
