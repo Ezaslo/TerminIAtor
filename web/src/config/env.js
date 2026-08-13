@@ -6,16 +6,6 @@ require('dotenv').config({
   quiet: true,
 });
 
-function parseInteger(value, fallback) {
-  const parsedValue = Number.parseInt(value, 10);
-
-  if (Number.isNaN(parsedValue)) {
-    return fallback;
-  }
-
-  return parsedValue;
-}
-
 function parseBoundedInteger(
   value,
   name,
