@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "check": "node --check server.js && node --check public/script.js"
+    "check": "node --check server.js && node --check public/script.js",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "terraform",
