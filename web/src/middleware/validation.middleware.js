@@ -100,6 +100,28 @@ function validateInvitationAcceptance(req, res, next) {
   return next();
 }
 
+function validateInvitationToken(req, res, next) {
+  const token =
+    typeof req.body?.token === 'string'
+      ? req.body.token.trim()
+      : '';
+
+  if (!token) {
+    return res.status(400).json({
+      error: 'Le jeton d’invitation est obligatoire.'
+    });
+  }
+
+  if (token.length > 256) {
+    return res.status(400).json({
+      error: 'Le jeton d’invitation est invalide.'
+    });
+  }
+
+  req.body.token = token;
+  return next();
+}
+
 const ALLOWED_SESSION_MODES = new Set([
   'individual',
   'team'
@@ -275,6 +297,7 @@ module.exports = {
   validateLogin,
   validateInvitationCreation,
   validateInvitationAcceptance,
+  validateInvitationToken,
   validateDeployment,
   validatePasswordChange,
   validateAdminPasswordReset,

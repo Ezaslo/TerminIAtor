@@ -12,6 +12,7 @@ const router = express.Router();
 
 router.post(
   '/validate',
+  validationMiddleware.validateInvitationToken,
   invitationController.getInvitationDetails
 );
 
