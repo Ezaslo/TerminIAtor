@@ -31,6 +31,16 @@ async function checkAuthentication() {
     const authentication =
       await response.json();
 
+    if (
+      !authentication ||
+      !authentication.user ||
+      !authentication.user.id
+    ) {
+      throw new Error(
+        'Réponse d’authentification invalide'
+      );
+    }
+
     window.terminiatorAuth =
       authentication;
 
