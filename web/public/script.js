@@ -3,6 +3,7 @@ let isDestroying = false;
 let eventSource = null;
 let sessionRefreshInterval = null;
 let lastSubmittedSession = null;
+let currentSessionId = null;
 
 function authHeaders() {
   return {
@@ -396,17 +397,9 @@ function renderSessionSummary(
     displayedSession?.expiresAt ||
     null;
 
-  const accessUrl =
-    activeSession?.proxyUrl ||
-    activeSession?.accessUrl ||
-    null;
-
   const canOpen =
     status === 'ready' &&
-    Boolean(
-      activeSession?.autoOpenAvailable ||
-      accessUrl
-    ) &&
+    Boolean(activeSession?.autoOpenAvailable) &&
     !isRunning;
 
 
@@ -418,12 +411,28 @@ function renderSessionSummary(
     `Nom : ${escapeHtml(workspaceName)}<br />` +
    `Mode : ${sessionMode === 'team' ? 'Équipe' : 'Individuel'}<br />` +
    `Expiration : ${escapeHtml(formatDateTime(expiresAt))}` +
-    (accessUrl && status === 'ready'
-      ? `<br />Accès : <a href="${escapeHtml(accessUrl)}" target="_blank" rel="noopener noreferrer">Ouvrir l’espace</a>`
+    (status === 'ready' && activeSession?.autoOpenAvailable
+      ? `<br />Accès : <a href="#" id="sessionAccessLink">Ouvrir l’espace</a>`
       : '');
 
   if (openSessionBtn) {
     openSessionBtn.disabled = !canOpen;
+  }
+
+  const sessionAccessLink =
+    document.getElementById('sessionAccessLink');
+
+  if (sessionAccessLink) {
+    sessionAccessLink.addEventListener('click', (event) => {
+      event.preventDefault();
+
+      if (
+        openSessionBtn &&
+        !openSessionBtn.disabled
+      ) {
+        openSessionBtn.click();
+      }
+    });
   }
 }
 
@@ -434,6 +443,9 @@ async function refreshSessionSummary() {
     if (!response.ok) return;
 
     const data = await response.json();
+
+    currentSessionId =
+      data.session?.databaseSessionId || null;
 
     applyOperationState(data.operation || {});
     renderSessionSummary(
@@ -463,7 +475,7 @@ function humanizeErrorMessage(errorText) {
   }
 
   if (errorText.includes('VcpuLimitExceeded')) {
-    return 'Le quota AWS disponible est insuffisant.';
+    return 'Le quota Infomaniak Public Cloud disponible est insuffisant.';
   }
 
   return errorText;
@@ -493,10 +505,6 @@ function setupDeployButton() {
       expiresAt: null
     };
 
-    localStorage.setItem(
-      'lastSubmittedSession',
-      JSON.stringify(lastSubmittedSession)
-    );
 
     isDeploying = true;
     deployBtn.disabled = true;
@@ -532,6 +540,12 @@ function setupDeployButton() {
         addLog(`Erreur de création : ${errorText}`, 'error');
         window.alert(errorText);
         return;
+      }
+
+      const data = await response.json();
+
+      if (data?.sessionId) {
+        currentSessionId = data.sessionId;
       }
 
       addLog(
@@ -580,9 +594,18 @@ function setupDestroyButton() {
     addLog('Suppression de l’espace demandée.', 'info');
 
     try {
+      if (!currentSessionId) {
+        throw new Error(
+          'Aucune session accessible à supprimer.'
+        );
+      }
+
       const response = await fetch('/api/destroy', {
         method: 'POST',
-        headers: authHeaders()
+        headers: authHeaders(),
+        body: JSON.stringify({
+          sessionId: currentSessionId
+        })
       });
 
       if (!response.ok) {
@@ -604,8 +627,8 @@ function setupDestroyButton() {
         return;
       }
 
-      localStorage.removeItem('lastSubmittedSession');
       lastSubmittedSession = null;
+      currentSessionId = null;
 
       addLog('La suppression de l’espace a été lancée.', 'success');
       window.setTimeout(refreshSessionSummary, 1000);
@@ -639,9 +662,18 @@ function setupOpenSessionButton() {
     openSessionBtn.textContent = 'Ouverture...';
 
     try {
+      if (!currentSessionId) {
+        throw new Error(
+          'Aucune session accessible à ouvrir.'
+        );
+      }
+
       const response = await fetch('/api/session/open', {
         method: 'POST',
-        headers: authHeaders()
+        headers: authHeaders(),
+        body: JSON.stringify({
+          sessionId: currentSessionId
+        })
       });
 
       if (!response.ok) {
@@ -679,17 +711,6 @@ function setupOpenSessionButton() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  try {
-    const savedSession =
-      localStorage.getItem('lastSubmittedSession');
-
-    if (savedSession) {
-      lastSubmittedSession = JSON.parse(savedSession);
-    }
-  } catch (_) {
-    lastSubmittedSession = null;
-  }
-
   setupFormInteractions();
   setupDeployButton();
   setupOpenSessionButton();

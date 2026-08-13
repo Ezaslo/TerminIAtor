@@ -130,11 +130,17 @@ app.use(express.static('public'));
 
 const clients = [];
 
+// Une seule opération Terraform est encore exécutée à la fois dans ce MVP,
+// mais son contexte est maintenant explicitement rattaché à l'utilisateur
+// et à la session concernés. Cela évite d'exposer son état aux autres comptes.
 const currentOperation = {
   type: 'idle',
   status: 'idle',
   phase: 'idle',
   cancelReadiness: false,
+  sessionId: null,
+  userId: null,
+  tenantId: null,
   logs: []
 };
 
@@ -173,15 +179,14 @@ const draftSessionState = {
   expiresAt: null
 };
 
-const sessionSecrets = {
-  adminEmail: null,
-  adminPassword: null,
-  launchTokens: {},
-  jwt: null,
-  jwtExpiresAt: null
-};
+// Les identifiants/JWT OpenWebUI sont isolés par session.
+// Un token de lancement est également lié à un userId + tenantId + sessionId.
+const sessionSecretsById = new Map();
+const launchTokens = {};
 
-let ttlDestroyTimer = null;
+// Un timer TTL par session : la création d'une seconde session n'annule plus
+// le timer de destruction de la première.
+const ttlDestroyTimers = new Map();
 const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
   5 * 60 * 1000;
 const PROXY_COOKIE_NAME = 'privalyse_launch_token';
@@ -256,19 +261,31 @@ async function requireSessionAccess(
   res,
   next
 ) {
-  const sessionId =
-    req.body.sessionId ||
-    req.params.sessionId ||
-    sessionState.databaseSessionId;
-
-  if (!sessionId) {
-    return res.status(400).json({
-      ok: false,
-      error: 'Identifiant de session manquant'
-    });
-  }
-
   try {
+    let sessionId =
+      req.body?.sessionId ||
+      req.params?.sessionId ||
+      req.query?.sessionId ||
+      null;
+
+    if (!sessionId) {
+      const accessibleSessions =
+        await sessionRepository.listSessionsForUser(
+          req.auth.userId,
+          req.auth.tenantId,
+          false
+        );
+
+      sessionId = accessibleSessions[0]?.id || null;
+    }
+
+    if (!sessionId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Identifiant de session manquant'
+      });
+    }
+
     const allowed =
       await sessionRepository.canUserAccessSession(
         sessionId,
@@ -351,12 +368,54 @@ function clearSessionLikeState(target) {
   target.createdAt = null;
   target.expiresAt = null;
 }
-function clearSessionSecrets() {
-  sessionSecrets.adminEmail = null;
-  sessionSecrets.adminPassword = null;
-  sessionSecrets.jwt = null;
-  sessionSecrets.jwtExpiresAt = null;
-  sessionSecrets.launchTokens = {};
+function createSessionSecrets() {
+  return {
+    adminEmail: null,
+    adminPassword: null,
+    authMode: 'local_admin',
+    jwt: null,
+    jwtExpiresAt: null,
+  };
+}
+
+function getSessionSecretsForId(
+  sessionId,
+  createIfMissing = false
+) {
+  if (!sessionId) return null;
+
+  if (
+    !sessionSecretsById.has(sessionId) &&
+    createIfMissing
+  ) {
+    sessionSecretsById.set(
+      sessionId,
+      createSessionSecrets()
+    );
+  }
+
+  return sessionSecretsById.get(sessionId) || null;
+}
+
+function deleteLaunchTokensForSession(sessionId) {
+  for (const [token, entry] of Object.entries(launchTokens)) {
+    if (entry?.sessionId === sessionId) {
+      delete launchTokens[token];
+    }
+  }
+}
+
+function clearSessionSecrets(sessionId = null) {
+  if (sessionId) {
+    sessionSecretsById.delete(sessionId);
+    deleteLaunchTokensForSession(sessionId);
+    return;
+  }
+
+  sessionSecretsById.clear();
+  for (const token of Object.keys(launchTokens)) {
+    delete launchTokens[token];
+  }
 }
 
 function buildAccessNotes(authMode, workspaceUrl, adminEmail) {
@@ -404,12 +463,25 @@ function pushLog(message, type = 'info') {
   const log = {
     message,
     type,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    sessionId: currentOperation.sessionId || null,
+    userId: currentOperation.userId || null,
   };
+
   currentOperation.logs.push(log);
 
+  // Les logs d'une création/destruction ne sont envoyés qu'au compte
+  // qui a déclenché l'opération. Les logs de maintenance sans userId
+  // restent côté serveur pour éviter toute fuite inter-utilisateur.
+  if (!log.userId) return;
+
   const data = `data: ${JSON.stringify(log)}\n\n`;
-  clients.forEach((res) => res.write(data));
+
+  clients.forEach((client) => {
+    if (client.userId === log.userId) {
+      client.res.write(data);
+    }
+  });
 }
 
 function persistState() {
@@ -420,7 +492,10 @@ function persistState() {
         {
           sessionState,
           draftSessionState,
-          sessionSecrets,
+          sessionSecretsById: Object.fromEntries(
+            sessionSecretsById.entries()
+          ),
+          launchTokens,
           updatedAt: new Date().toISOString()
         },
         null,
@@ -443,24 +518,76 @@ function loadPersistedState() {
     if (parsed && parsed.draftSessionState && typeof parsed.draftSessionState === 'object') {
       Object.assign(draftSessionState, parsed.draftSessionState);
     }
-    if (parsed && parsed.sessionSecrets && typeof parsed.sessionSecrets === 'object') {
-      Object.assign(sessionSecrets, parsed.sessionSecrets);
-      if (!sessionSecrets.launchTokens || typeof sessionSecrets.launchTokens !== 'object') {
-        sessionSecrets.launchTokens = {};
+    sessionSecretsById.clear();
+
+    if (
+      parsed &&
+      parsed.sessionSecretsById &&
+      typeof parsed.sessionSecretsById === 'object'
+    ) {
+      for (const [sessionId, secrets] of Object.entries(
+        parsed.sessionSecretsById
+      )) {
+        if (secrets && typeof secrets === 'object') {
+          sessionSecretsById.set(sessionId, secrets);
+        }
       }
-      delete sessionSecrets.launchToken;
-      delete sessionSecrets.launchTokenExpiresAt;
-      delete sessionSecrets.launchUserId;
+    } else if (
+      parsed &&
+      parsed.sessionSecrets &&
+      typeof parsed.sessionSecrets === 'object' &&
+      sessionState.databaseSessionId
+    ) {
+      // Migration transparente depuis l'ancien fichier d'état mono-session.
+      const legacySecrets = {
+        adminEmail: parsed.sessionSecrets.adminEmail || null,
+        adminPassword: parsed.sessionSecrets.adminPassword || null,
+        authMode: sessionState.authMode || 'local_admin',
+        jwt: parsed.sessionSecrets.jwt || null,
+        jwtExpiresAt: parsed.sessionSecrets.jwtExpiresAt || null,
+      };
+
+      sessionSecretsById.set(
+        sessionState.databaseSessionId,
+        legacySecrets
+      );
+
+      if (
+        parsed.sessionSecrets.launchTokens &&
+        typeof parsed.sessionSecrets.launchTokens === 'object'
+      ) {
+        Object.assign(
+          launchTokens,
+          parsed.sessionSecrets.launchTokens
+        );
+      }
+    }
+
+    if (
+      parsed &&
+      parsed.launchTokens &&
+      typeof parsed.launchTokens === 'object'
+    ) {
+      Object.assign(launchTokens, parsed.launchTokens);
     }
   } catch (error) {
     pushLog(`Etat persiste ignore: ${error.message}`, 'error');
   }
 }
 
-function clearScheduledDestroy() {
-  if (ttlDestroyTimer) {
-    clearTimeout(ttlDestroyTimer);
-    ttlDestroyTimer = null;
+function clearScheduledDestroy(sessionId = null) {
+  if (!sessionId) {
+    for (const timer of ttlDestroyTimers.values()) {
+      clearTimeout(timer);
+    }
+    ttlDestroyTimers.clear();
+    return;
+  }
+
+  const timer = ttlDestroyTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    ttlDestroyTimers.delete(sessionId);
   }
 }
 
@@ -482,6 +609,7 @@ async function destroyInfraInternal(
   currentOperation.status = 'running';
   currentOperation.phase = 'terraform';
   currentOperation.cancelReadiness = false;
+  currentOperation.sessionId = sessionId;
   currentOperation.logs = [];
 
   pushLog(
@@ -535,14 +663,20 @@ async function destroyInfraInternal(
 
     destroySucceeded = true;
   } finally {
-    clearScheduledDestroy();
+    clearScheduledDestroy(sessionId);
+
+    if (destroySucceeded) {
+      clearSessionSecrets(sessionId);
+    }
 
     if (
       sessionState.databaseSessionId === sessionId
     ) {
       clearSessionLikeState(sessionState);
       clearSessionLikeState(draftSessionState);
-      clearSessionSecrets();
+    }
+
+    if (destroySucceeded) {
       persistState();
     }
 
@@ -558,14 +692,25 @@ function scheduleDestroyFromTtl(
   sessionId,
   hours
 ) {
-  clearScheduledDestroy();
+  clearScheduledDestroy(sessionId);
 
   const ttlMs = hours * 60 * 60 * 1000;
 
-  ttlDestroyTimer = setTimeout(async () => {
+  const runDestroy = async () => {
+    // Terraform reste sérialisé dans ce MVP. Si une autre opération tourne,
+    // on décale ce TTL d'une minute au lieu de perdre définitivement le timer.
     if (currentOperation.status === 'running') {
+      const retryTimer = setTimeout(
+        runDestroy,
+        60 * 1000
+      );
+      ttlDestroyTimers.set(sessionId, retryTimer);
       return;
     }
+
+    currentOperation.sessionId = sessionId;
+    currentOperation.userId = null;
+    currentOperation.tenantId = null;
 
     pushLog(
       `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
@@ -577,24 +722,16 @@ function scheduleDestroyFromTtl(
         sessionId,
         'ttl'
       );
-
-      pushLog(
-        'Destruction automatique terminee',
-        'success'
-      );
     } catch (error) {
       currentOperation.status = 'error';
       currentOperation.phase = 'idle';
       currentOperation.cancelReadiness = false;
-
-      pushLog(
-        `Erreur destruction automatique: ${error.message}`,
-        'error'
-      );
-
       persistState();
     }
-  }, ttlMs);
+  };
+
+  const timer = setTimeout(runDestroy, ttlMs);
+  ttlDestroyTimers.set(sessionId, timer);
 }
 /**
  * Détruit les infrastructures associées aux sessions
@@ -628,6 +765,10 @@ async function cleanupExpiredSessions() {
     }
 
     try {
+      currentOperation.sessionId = expiredSession.id;
+      currentOperation.userId = null;
+      currentOperation.tenantId = null;
+
       pushLog(
         `Destruction automatique de la session expirée ${expiredSession.id}.`,
         'info'
@@ -655,116 +796,159 @@ async function cleanupExpiredSessions() {
   }
 }
 function restorePersistedSession() {
+  // Les états/secrets par session sont restaurés pour permettre la
+  // réouverture des workspaces après un redémarrage du backend.
+  // Les expirations sont reprises par cleanupExpiredSessions().
   loadPersistedState();
-  if (!sessionState.active || !sessionState.expiresAt) {
-    return;
-  }
-
-  const expiresAtMs = new Date(sessionState.expiresAt).getTime();
-  const remainingMs = expiresAtMs - Date.now();
-  if (remainingMs > 0) {
-    clearScheduledDestroy();
-    ttlDestroyTimer = setTimeout(async () => {
-      if (!sessionState.active || currentOperation.status === 'running') {
-        return;
-      }
-
-      pushLog(
-        `TTL restaure atteint. Lancement de la destruction automatique de la session.`,
-        'info'
-      );
-
-      try {
-        await destroySessionInternal(
-          sessionState.databaseSessionId,
-          'ttl'
-        );
-        pushLog('Destruction automatique terminee', 'success');
-      } catch (error) {
-        currentOperation.status = 'error';
-        currentOperation.phase = 'idle';
-        currentOperation.cancelReadiness = false;
-        pushLog(`Erreur destruction automatique: ${error.message}`, 'error');
-        persistState();
-      }
-    }, remainingMs);
-    return;
-  }
-
-  clearSessionLikeState(sessionState);
-  clearSessionLikeState(draftSessionState);
-  clearSessionSecrets();
-  persistState();
 }
 
 app.get(
   '/api/stream',
-
   authMiddleware.authenticate,
-
   authMiddleware.requireAuthentication,
-
   (req, res) => {
-  if (ADMIN_TOKEN_ENABLED && (req.query.token || '') !== ADMIN_TOKEN) {
-    return res.status(401).json({
-      ok: false,
-      error: 'Token administrateur Privalyse invalide ou manquant'
+    if (
+      ADMIN_TOKEN_ENABLED &&
+      (req.query.token || '') !== ADMIN_TOKEN
+    ) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Token administrateur Privalyse invalide ou manquant'
+      });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    currentOperation.logs
+      .filter((log) => log.userId === req.auth.userId)
+      .forEach((log) => {
+        res.write(`data: ${JSON.stringify(log)}\n\n`);
+      });
+
+    const client = {
+      res,
+      userId: req.auth.userId,
+      tenantId: req.auth.tenantId,
+    };
+
+    clients.push(client);
+
+    req.on('close', () => {
+      const idx = clients.indexOf(client);
+      if (idx !== -1) clients.splice(idx, 1);
     });
   }
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  currentOperation.logs.forEach((log) => {
-    res.write(`data: ${JSON.stringify(log)}\n\n`);
-  });
-
-  clients.push(res);
-
-  req.on('close', () => {
-    const idx = clients.indexOf(res);
-    if (idx !== -1) clients.splice(idx, 1);
-  });
-});
+);
 
 app.get(
   '/api/session',
-
   authMiddleware.authenticate,
-
   authMiddleware.requireAuthentication,
-
   requireAdminToken,
+  async (req, res) => {
+    try {
+      const accessibleSessions =
+        await sessionRepository.listSessionsForUser(
+          req.auth.userId,
+          req.auth.tenantId,
+          false
+        );
 
-  (req, res) => {
-  res.json({
-    ok: true,
-    session: {
-      ...sessionState,
-      autoOpenAvailable:
-        sessionState.active &&
-        sessionState.status === 'ready' &&
-        sessionState.authMode === 'local_admin',
-      proxyUrl:
-        sessionState.active &&
-        sessionState.status === 'ready' &&
-        sessionState.authMode === 'local_admin'
-          ? getProxyBaseUrl(req)
-          : null,
-      now: new Date().toISOString()
-    },
-    draftSession: {
-      ...draftSessionState,
-      now: new Date().toISOString()
-    },
-    operation: {
-      type: currentOperation.type,
-      status: currentOperation.status,
-      phase: currentOperation.phase
+      const databaseSession =
+        accessibleSessions[0] || null;
+
+      let session = null;
+
+      if (databaseSession) {
+        const secrets =
+          getSessionSecretsForId(
+            databaseSession.id,
+            false
+          );
+
+        const memberCount = Number(
+          databaseSession.member_count || 1
+        );
+
+        session = {
+          active:
+            databaseSession.status !== 'destroyed',
+          databaseSessionId: databaseSession.id,
+          status: databaseSession.status,
+          workspaceName: databaseSession.name,
+          workspaceSlug: databaseSession.slug,
+          accessUrl: databaseSession.access_url,
+          authMode:
+            secrets?.authMode || 'local_admin',
+          sessionMode:
+            memberCount > 1
+              ? 'team'
+              : 'individual',
+          teamSizeHint: memberCount,
+          createdAt: databaseSession.created_at,
+          expiresAt: databaseSession.expires_at,
+          autoOpenAvailable:
+            databaseSession.status === 'ready' &&
+            Boolean(
+              secrets?.adminEmail &&
+              secrets?.adminPassword
+            ),
+          proxyUrl:
+            databaseSession.status === 'ready'
+              ? getProxyBaseUrl(req)
+              : null,
+          now: new Date().toISOString(),
+        };
+      }
+
+      const operationVisible =
+        currentOperation.userId === req.auth.userId ||
+        (
+          session &&
+          currentOperation.sessionId ===
+            session.databaseSessionId
+        );
+
+      return res.json({
+        ok: true,
+        session,
+        draftSession: null,
+        sessions: accessibleSessions.map((item) => ({
+          id: item.id,
+          name: item.name,
+          status: item.status,
+          expiresAt: item.expires_at,
+          sessionMode:
+            Number(item.member_count || 1) > 1
+              ? 'team'
+              : 'individual',
+          memberCount: Number(item.member_count || 1),
+        })),
+        operation: operationVisible
+          ? {
+              type: currentOperation.type,
+              status: currentOperation.status,
+              phase: currentOperation.phase,
+              sessionId: currentOperation.sessionId,
+            }
+          : {
+              type: 'idle',
+              status: 'idle',
+              phase: 'idle',
+              sessionId: null,
+            },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          'Impossible de charger les sessions accessibles.'
+      });
     }
-  });
-});
+  }
+);
 
 app.post(
   '/api/session/open',
@@ -773,18 +957,24 @@ app.post(
   requireSessionAccess,
   async (req, res) => {
     try {
-      assertLocalAdminReady();
-      await ensureOpenWebUiJwt();
+      const sessionId = req.sessionId;
 
-      const launchToken = crypto.randomBytes(24).toString('base64url');
-      const launchTokenExpiresAt = new Date(
-        Date.now() + 15 * 60 * 1000
-      ).toISOString();
+      await assertLocalAdminReady(sessionId);
+      await ensureOpenWebUiJwt(sessionId);
 
-      sessionSecrets.launchTokens[launchToken] = {
-        userId: req.auth.userId,
-        expiresAt: launchTokenExpiresAt
-      };
+const launchToken =
+  crypto.randomBytes(24).toString('base64url');
+
+const launchTokenExpiresAt = new Date(
+  Date.now() + 15 * 60 * 1000
+).toISOString();
+
+launchTokens[launchToken] = {
+  userId: req.auth.userId,
+  tenantId: req.auth.tenantId,
+  sessionId,
+  expiresAt: launchTokenExpiresAt
+};
       persistState();
 
       return res.json({
@@ -1080,10 +1270,18 @@ async function fetchJson(url) {
   return response.body;
 }
 
-function getOpenWebUiBaseUrl() {
-  if (!sessionState.accessUrl) return null;
+async function getOpenWebUiBaseUrl(sessionId) {
+  const databaseSession =
+    await sessionRepository.getSessionById(
+      sessionId
+    );
+
+  if (!databaseSession?.access_url) {
+    return null;
+  }
+
   try {
-    const url = new URL(sessionState.accessUrl);
+    const url = new URL(databaseSession.access_url);
     return `${url.protocol}//${url.host}`;
   } catch (_) {
     return null;
@@ -1091,6 +1289,10 @@ function getOpenWebUiBaseUrl() {
 }
 
 function getProxyBaseUrl(req = null) {
+  if (config.proxyBaseUrl) {
+    return config.proxyBaseUrl;
+  }
+
   const host = req?.hostname || 'localhost';
   return `http://${host}:${PROXY_PORT}`;
 }
@@ -1137,75 +1339,151 @@ function normalizeSetCookieHeaders(setCookieHeaders = [], targetHost = 'localhos
     });
 }
 
-function assertLocalAdminReady() {
-  if (!sessionState.active || sessionState.status !== 'ready') {
-    throw new Error('La session OpenWebUI n est pas encore prete');
+async function assertLocalAdminReady(sessionId) {
+  const databaseSession =
+    await sessionRepository.getSessionById(
+      sessionId
+    );
+
+  if (
+    !databaseSession ||
+    databaseSession.status !== 'ready'
+  ) {
+    throw new Error(
+      'La session OpenWebUI n est pas encore prete'
+    );
   }
-  if (sessionState.authMode !== 'local_admin') {
-    throw new Error('L ouverture automatique n est disponible qu en mode compte admin local');
+
+  const secrets =
+    getSessionSecretsForId(sessionId, false);
+
+  if (!secrets) {
+    throw new Error(
+      'Secrets OpenWebUI indisponibles pour cette session'
+    );
+  }
+
+  if ((secrets.authMode || 'local_admin') !== 'local_admin') {
+    throw new Error(
+      'L ouverture automatique n est disponible qu en mode compte admin local'
+    );
   }
 }
 
-async function signInToOpenWebUi() {
-  const openWebUiBaseUrl = getOpenWebUiBaseUrl();
+async function signInToOpenWebUi(sessionId) {
+  const openWebUiBaseUrl =
+    await getOpenWebUiBaseUrl(sessionId);
+
   if (!openWebUiBaseUrl) {
-    throw new Error('URL OpenWebUI indisponible pour le login automatique');
-  }
-  if (!sessionSecrets.adminEmail || !sessionSecrets.adminPassword) {
-    throw new Error('Identifiants OpenWebUI indisponibles pour le login automatique');
-  }
-
-  const response = await requestJson(`${openWebUiBaseUrl}/api/v1/auths/signin`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email: sessionSecrets.adminEmail,
-      password: sessionSecrets.adminPassword
-    }),
-    timeoutMs: 15000
-  });
-
-  if (response.statusCode < 200 || response.statusCode >= 300 || !response.body?.token) {
-    throw new Error('Connexion automatique OpenWebUI impossible');
+    throw new Error(
+      'URL OpenWebUI indisponible pour le login automatique'
+    );
   }
 
-  sessionSecrets.jwt = response.body.token;
-  sessionSecrets.jwtExpiresAt = response.body.expires_at
-    ? new Date(response.body.expires_at * 1000).toISOString()
-    : new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const secrets =
+    getSessionSecretsForId(sessionId, false);
+
+  if (
+    !secrets?.adminEmail ||
+    !secrets?.adminPassword
+  ) {
+    throw new Error(
+      'Identifiants OpenWebUI indisponibles pour cette session'
+    );
+  }
+
+  const response = await requestJson(
+    `${openWebUiBaseUrl}/api/v1/auths/signin`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email: secrets.adminEmail,
+        password: secrets.adminPassword
+      }),
+      timeoutMs: 15000
+    }
+  );
+
+  if (
+    response.statusCode < 200 ||
+    response.statusCode >= 300 ||
+    !response.body?.token
+  ) {
+    throw new Error(
+      'Connexion automatique OpenWebUI impossible'
+    );
+  }
+
+  secrets.jwt = response.body.token;
+  secrets.jwtExpiresAt = response.body.expires_at
+    ? new Date(
+        response.body.expires_at * 1000
+      ).toISOString()
+    : new Date(
+        Date.now() + 60 * 60 * 1000
+      ).toISOString();
+
   persistState();
-  return sessionSecrets.jwt;
+  return secrets.jwt;
 }
 
-async function ensureOpenWebUiJwt() {
-  if (sessionSecrets.jwt && sessionSecrets.jwtExpiresAt) {
-    const expiresMs = new Date(sessionSecrets.jwtExpiresAt).getTime();
-    if (Number.isFinite(expiresMs) && expiresMs - Date.now() > 60 * 1000) {
-      return sessionSecrets.jwt;
+async function ensureOpenWebUiJwt(sessionId) {
+  const secrets =
+    getSessionSecretsForId(sessionId, false);
+
+  if (!secrets) {
+    throw new Error(
+      'Secrets OpenWebUI indisponibles pour cette session'
+    );
+  }
+
+  if (secrets.jwt && secrets.jwtExpiresAt) {
+    const expiresMs =
+      new Date(secrets.jwtExpiresAt).getTime();
+
+    if (
+      Number.isFinite(expiresMs) &&
+      expiresMs - Date.now() > 60 * 1000
+    ) {
+      return secrets.jwt;
     }
   }
 
-  return signInToOpenWebUi();
+  return signInToOpenWebUi(sessionId);
 }
 
-function rewriteProxyLocation(location, targetBaseUrl, req) {
+function rewriteProxyLocation(
+  location,
+  targetBaseUrl,
+  req,
+  sessionId
+) {
   if (!location) return location;
 
   try {
     const targetBase = new URL(targetBaseUrl);
     const resolved = new URL(location, targetBase);
+
     if (resolved.origin !== targetBase.origin) {
       return location;
     }
 
     const proxyBase = new URL(getProxyBaseUrl(req));
-    return `${proxyBase.origin}${resolved.pathname}${resolved.search}${resolved.hash}`;
+    const sessionPrefix =
+      `/session/${encodeURIComponent(sessionId)}`;
+
+    return (
+      `${proxyBase.origin}${sessionPrefix}` +
+      `${resolved.pathname}${resolved.search}${resolved.hash}`
+    );
   } catch (_) {
     return location;
   }
 }
+
 /**
  * Extrait l'identifiant de session depuis une URL.
  *
@@ -1241,21 +1519,67 @@ function getSessionIdFromRequestUrl(requestUrl) {
   }
 }
 
-async function proxyRequestToOpenWebUi(
+function createProxyAccessError(message, statusCode = 403) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+async function resolveAuthorizedProxyContext(
   req,
-  res,
-  jwt
+  requestUrl
 ) {
+  const cookieToken = getCookieValue(
+    req,
+    PROXY_COOKIE_NAME
+  );
+
+  const launchEntry = cookieToken
+    ? launchTokens[cookieToken]
+    : null;
+
+  // Le cookie de lancement est la preuve d'acces utilisee par la
+  // passerelle apres /launch/:token. Il a deja ete emis uniquement
+  // apres authentification Privalyse + controle des droits en base.
+  // On ne depend donc pas du cookie de login sur le port du proxy.
+  if (
+    !launchEntry ||
+    !launchEntry.userId ||
+    !launchEntry.tenantId ||
+    !launchEntry.sessionId ||
+    new Date(launchEntry.expiresAt).getTime() <= Date.now()
+  ) {
+    throw createProxyAccessError(
+      'Ouverture automatique invalide. Reviens dans Privalyse.',
+      403
+    );
+  }
+
+  const requestedSessionId =
+    getSessionIdFromRequestUrl(requestUrl);
+
   const sessionId =
-    getSessionIdFromRequestUrl(
-      req.originalUrl
+    requestedSessionId || launchEntry.sessionId;
+
+  if (launchEntry.sessionId !== sessionId) {
+    throw createProxyAccessError(
+      'Ce lien d ouverture appartient a une autre session.',
+      403
+    );
+  }
+
+  const allowed =
+    await sessionRepository.canUserAccessSession(
+      sessionId,
+      launchEntry.userId,
+      launchEntry.tenantId
     );
 
-  if (!sessionId) {
-    res
-      .status(400)
-      .send('Identifiant de session manquant');
-    return;
+  if (!allowed) {
+    throw createProxyAccessError(
+      'Acces refuse a cette session.',
+      403
+    );
   }
 
   const databaseSession =
@@ -1266,40 +1590,100 @@ async function proxyRequestToOpenWebUi(
   if (
     !databaseSession ||
     !databaseSession.access_url ||
-    databaseSession.status === 'destroyed'
+    databaseSession.status !== 'ready'
   ) {
-    res
-      .status(503)
-      .send('Session OpenWebUI indisponible');
-    return;
+    throw createProxyAccessError(
+      'Session OpenWebUI indisponible.',
+      503
+    );
   }
+
+  return {
+    sessionId,
+    launchEntry,
+    databaseSession,
+  };
+}
+
+function stripPrivalyseRoutingQuery(requestUrl) {
+  try {
+    const parsed = new URL(
+      requestUrl || '/',
+      'http://privalyse.local'
+    );
+
+    parsed.searchParams.delete(
+      'privalyse_session'
+    );
+
+    return (
+      `${parsed.pathname}${parsed.search}` ||
+      '/'
+    );
+  } catch (_) {
+    return requestUrl || '/';
+  }
+}
+
+async function proxyRequestToOpenWebUi(
+  req,
+  res,
+  jwt,
+  proxyContext
+) {
+  const {
+    sessionId,
+    databaseSession,
+  } = proxyContext;
 
   const targetBaseUrl =
     databaseSession.access_url;
 
-  const proxyPath =
-    req.originalUrl.replace(
-      /^\/session\/[^/]+/,
-      ''
-    ) || '/';
+  const requestHasSessionPrefix = Boolean(
+    getSessionIdFromRequestUrl(
+      req.originalUrl
+    )
+  );
+
+  const proxyPath = requestHasSessionPrefix
+    ? (
+        req.originalUrl.replace(
+          /^\/session\/[^/]+/,
+          ''
+        ) || '/'
+      )
+    : stripPrivalyseRoutingQuery(
+        req.originalUrl
+      );
 
   const targetUrl = new URL(
     proxyPath,
     targetBaseUrl
   );
-  const client = targetUrl.protocol === 'https:' ? https : http;
+
+  const client =
+    targetUrl.protocol === 'https:'
+      ? https
+      : http;
+
   const headers = { ...req.headers };
   delete headers.host;
   delete headers['content-length'];
+
   headers.authorization = `Bearer ${jwt}`;
   headers['accept-encoding'] = 'identity';
   headers.connection = 'keep-alive';
   headers.host = targetUrl.host;
   headers.origin = targetBaseUrl;
-  headers['x-forwarded-host'] = req.headers.host || '';
-  headers['x-forwarded-proto'] = 'http';
+  headers['x-forwarded-host'] =
+    req.headers.host || '';
+  headers['x-forwarded-proto'] =
+    req.headers['x-forwarded-proto'] ||
+    (req.socket.encrypted ? 'https' : 'http');
 
-  const forwardCookies = buildForwardCookieHeader(req);
+  const forwardCookies =
+    buildForwardCookieHeader(req);
+
   if (forwardCookies) {
     headers.cookie = forwardCookies;
   } else {
@@ -1310,25 +1694,65 @@ async function proxyRequestToOpenWebUi(
     targetUrl,
     {
       method: req.method,
-      headers
+      headers,
     },
     (proxyRes) => {
-      const responseHeaders = { ...proxyRes.headers };
+      const responseHeaders = {
+        ...proxyRes.headers,
+      };
+
       delete responseHeaders['content-encoding'];
       delete responseHeaders['content-length'];
-      if (responseHeaders.location) {
-        responseHeaders.location = rewriteProxyLocation(responseHeaders.location, targetBaseUrl, req);
+
+      if (
+        responseHeaders.location &&
+        requestHasSessionPrefix
+      ) {
+        responseHeaders.location =
+          rewriteProxyLocation(
+            responseHeaders.location,
+            targetBaseUrl,
+            req,
+            sessionId
+          );
       }
-      res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+
+      res.writeHead(
+        proxyRes.statusCode || 502,
+        responseHeaders
+      );
+
       proxyRes.pipe(res);
     }
   );
 
   proxyReq.on('error', (error) => {
-    res.status(502).send(`Proxy OpenWebUI indisponible: ${error.message}`);
+    if (!res.headersSent) {
+      res
+        .status(502)
+        .send(
+          `Proxy OpenWebUI indisponible: ${error.message}`
+        );
+      return;
+    }
+
+    res.destroy(error);
   });
 
   req.pipe(proxyReq);
+}
+
+function destroySocketQuietly(targetSocket) {
+  if (
+    targetSocket &&
+    !targetSocket.destroyed
+  ) {
+    try {
+      targetSocket.destroy();
+    } catch (_) {
+      // Rien a faire : la socket est deja en cours de fermeture.
+    }
+  }
 }
 
 async function proxyUpgradeToOpenWebUi(
@@ -1336,127 +1760,159 @@ async function proxyUpgradeToOpenWebUi(
   socket,
   head
 ) {
-  try {
-    assertLocalAdminReady();
+  // Un navigateur peut fermer/recharger une connexion WebSocket
+  // pendant le handshake. ECONNRESET est alors normal et ne doit
+  // jamais faire tomber tout le backend Node.
+  socket.on('error', () => {
+    destroySocketQuietly(socket);
+  });
 
-    await new Promise((resolve, reject) => {
-      authMiddleware.authenticate(
+  let proxyContext;
+
+  try {
+    proxyContext =
+      await resolveAuthorizedProxyContext(
         req,
-        null,
-        (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        }
+        req.url
       );
-    });
   } catch (_) {
     socket.destroy();
     return;
   }
 
-  const cookieToken = getCookieValue(
-    req,
-    PROXY_COOKIE_NAME
-  );
-  const launchEntry = cookieToken
-  ? sessionSecrets.launchTokens[cookieToken]
-  : null;
-
-  if (
-    !req.auth ||
-    !launchEntry ||
-    launchEntry.userId !== req.auth.userId ||
-    new Date(launchEntry.expiresAt).getTime() <= Date.now() ||
-    !sessionSecrets.jwt
-  ) {
-    socket.destroy();
-    return;
-  }
-  const sessionId =
-    getSessionIdFromRequestUrl(
-      req.url
-    );
-
-  if (!sessionId) {
-    socket.destroy();
-    return;
-  }
-
-  let databaseSession;
+  let sessionJwt;
 
   try {
-    databaseSession =
-      await sessionRepository.getSessionById(
-        sessionId
+    sessionJwt =
+      await ensureOpenWebUiJwt(
+        proxyContext.sessionId
       );
   } catch (_) {
-    socket.destroy();
-    return;
-  }
-
-  if (
-    !databaseSession ||
-    !databaseSession.access_url ||
-    databaseSession.status === 'destroyed'
-  ) {
     socket.destroy();
     return;
   }
 
   const targetBaseUrl =
-    databaseSession.access_url;
+    proxyContext.databaseSession.access_url;
 
-  const proxyPath =
-    req.url.replace(
-      /^\/session\/[^/]+/,
-      ''
-    ) || '/';
+  const requestHasSessionPrefix = Boolean(
+    getSessionIdFromRequestUrl(req.url)
+  );
+
+  const proxyPath = requestHasSessionPrefix
+    ? (
+        req.url.replace(
+          /^\/session\/[^/]+/,
+          ''
+        ) || '/'
+      )
+    : stripPrivalyseRoutingQuery(
+        req.url
+      );
 
   const targetUrl = new URL(
     proxyPath,
     targetBaseUrl
   );
-  const client = targetUrl.protocol === 'https:' ? https : http;
+
+  const client =
+    targetUrl.protocol === 'https:'
+      ? https
+      : http;
+
   const headers = { ...req.headers };
   headers.host = targetUrl.host;
   headers.origin = targetBaseUrl;
-  headers.authorization = `Bearer ${sessionSecrets.jwt}`;
-  headers['x-forwarded-host'] = req.headers.host || '';
-  headers['x-forwarded-proto'] = 'http';
+  headers.authorization =
+    `Bearer ${sessionJwt}`;
+  headers['x-forwarded-host'] =
+    req.headers.host || '';
+  headers['x-forwarded-proto'] =
+    req.headers['x-forwarded-proto'] ||
+    (req.socket.encrypted ? 'https' : 'http');
 
   const proxyReq = client.request({
     protocol: targetUrl.protocol,
     hostname: targetUrl.hostname,
-    port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
-    path: `${targetUrl.pathname}${targetUrl.search}`,
+    port:
+      targetUrl.port ||
+      (targetUrl.protocol === 'https:'
+        ? 443
+        : 80),
+    path:
+      `${targetUrl.pathname}${targetUrl.search}`,
     method: req.method,
-    headers
+    headers,
   });
 
-  proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-    socket.write(
-      `HTTP/${req.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n` +
-        Object.entries(proxyRes.headers)
-          .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join('; ') : value}`)
-          .join('\r\n') +
-        '\r\n\r\n'
-    );
-    if (proxyHead && proxyHead.length) {
-      socket.write(proxyHead);
+  proxyReq.on(
+    'upgrade',
+    (proxyRes, proxySocket, proxyHead) => {
+      const closeBothSockets = () => {
+        destroySocketQuietly(proxySocket);
+        destroySocketQuietly(socket);
+      };
+
+      // ECONNRESET / EPIPE sont frequents lors d'un refresh,
+      // d'une fermeture d'onglet ou d'une reconnexion WebSocket.
+      // Ils restent locaux a cette connexion.
+      proxySocket.on(
+        'error',
+        closeBothSockets
+      );
+
+      socket.on(
+        'close',
+        () => destroySocketQuietly(proxySocket)
+      );
+
+      proxySocket.on(
+        'close',
+        () => destroySocketQuietly(socket)
+      );
+
+      try {
+        socket.write(
+          `HTTP/${req.httpVersion} ` +
+          `${proxyRes.statusCode} ` +
+          `${proxyRes.statusMessage}\r\n` +
+          Object.entries(proxyRes.headers)
+            .map(([key, value]) =>
+              `${key}: ${
+                Array.isArray(value)
+                  ? value.join('; ')
+                  : value
+              }`
+            )
+            .join('\r\n') +
+          '\r\n\r\n'
+        );
+
+        if (proxyHead && proxyHead.length) {
+          socket.write(proxyHead);
+        }
+
+        if (head && head.length) {
+          proxySocket.write(head);
+        }
+
+        proxySocket.pipe(socket);
+        socket.pipe(proxySocket);
+      } catch (_) {
+        closeBothSockets();
+      }
     }
-    if (head && head.length) {
-      proxySocket.write(head);
-    }
-    proxySocket.pipe(socket);
-    socket.pipe(proxySocket);
-  });
+  );
 
   proxyReq.on('error', () => {
-    socket.destroy();
+    destroySocketQuietly(socket);
+  });
+
+  // Si la cible refuse l'upgrade WebSocket avec une reponse HTTP,
+  // on ferme proprement au lieu de garder une socket orpheline.
+  proxyReq.on('response', (proxyRes) => {
+    proxyRes.resume();
+    destroySocketQuietly(socket);
   });
 
   proxyReq.end();
@@ -1840,6 +2296,9 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     currentOperation.status = 'running';
     currentOperation.phase = 'terraform';
     currentOperation.cancelReadiness = false;
+    currentOperation.sessionId = null;
+    currentOperation.userId = req.auth.userId;
+    currentOperation.tenantId = req.auth.tenantId;
     currentOperation.logs = [];
 
     databaseSession =
@@ -1857,6 +2316,8 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       databaseSession.id,
       req.auth.userId
     );
+
+    currentOperation.sessionId = databaseSession.id;
    if (sessionMode === 'team') {
   for (const member of groupMembers) {
     await sessionRepository.addUserToSession(
@@ -2079,11 +2540,18 @@ sessionState.groupId =
     : null;
       sessionState.createdAt = new Date().toISOString();
       sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
+      const sessionSecrets =
+        getSessionSecretsForId(
+          databaseSession.id,
+          true
+        );
+
       sessionSecrets.adminEmail = finalOwuiEmail;
       sessionSecrets.adminPassword = finalOwuiPassword;
-      sessionSecrets.launchTokens = {};
+      sessionSecrets.authMode = finalAuthMode;
       sessionSecrets.jwt = null;
       sessionSecrets.jwtExpiresAt = null;
+      deleteLaunchTokensForSession(databaseSession.id);
       persistState();
 
     currentOperation.phase = 'readiness';
@@ -2160,7 +2628,10 @@ persistState();
       finalSessionTtlHours
     );
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      sessionId: databaseSession.id
+    });
   } catch (e) {
   const message = String(
     e && e.message ? e.message : e
@@ -2219,20 +2690,21 @@ persistState();
         );
       }
 
-      if (
-        databaseSession &&
-        sessionState.databaseSessionId ===
-          databaseSession.id
-      ) {
-        clearSessionLikeState(
-          sessionState
-        );
+      if (databaseSession) {
+        clearSessionSecrets(databaseSession.id);
 
-        clearSessionLikeState(
-          draftSessionState
-        );
+        if (
+          sessionState.databaseSessionId ===
+            databaseSession.id
+        ) {
+          clearSessionLikeState(
+            sessionState
+          );
 
-        clearSessionSecrets();
+          clearSessionLikeState(
+            draftSessionState
+          );
+        }
 
         persistState();
       }
@@ -2312,7 +2784,8 @@ app.post(
     if (currentOperation.status === 'running') {
       const canInterruptReadiness =
         currentOperation.type === 'deploy' &&
-        currentOperation.phase === 'readiness';
+        currentOperation.phase === 'readiness' &&
+        currentOperation.sessionId === sessionId;
 
       if (canInterruptReadiness) {
         pushLog(
@@ -2342,6 +2815,10 @@ app.post(
         });
       }
     }
+
+    currentOperation.sessionId = sessionId;
+    currentOperation.userId = req.auth.userId;
+    currentOperation.tenantId = req.auth.tenantId;
 
     try {
       await destroySessionInternal(
@@ -2685,35 +3162,107 @@ proxyApp.get(
   '/launch/:token',
   authMiddleware.requireAuthentication,
   async (req, res) => {
-  try {
-    assertLocalAdminReady();
-    const launchEntry = sessionSecrets.launchTokens[req.params.token];
+    try {
+      const launchEntry =
+        launchTokens[req.params.token];
 
-if (
-  !launchEntry ||
-  launchEntry.userId !== req.auth.userId ||
-  new Date(launchEntry.expiresAt).getTime() <= Date.now()
-) { 
-      return res.status(403).send('Lien d ouverture expire ou invalide');
-    }
+      if (
+        !launchEntry ||
+        !launchEntry.sessionId ||
+        launchEntry.userId !== req.auth.userId ||
+        (launchEntry.tenantId &&
+          launchEntry.tenantId !== req.auth.tenantId) ||
+        new Date(
+          launchEntry.expiresAt
+        ).getTime() <= Date.now()
+      ) {
+        return res
+          .status(403)
+          .send(
+            'Lien d ouverture expire ou invalide'
+          );
+      }
 
-    const jwt = await ensureOpenWebUiJwt();
-    const remainingMs = Math.max(
-      60 * 1000,
-      new Date(launchEntry.expiresAt).getTime() - Date.now()
-    );
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader(
-      'Set-Cookie',
-      `${PROXY_COOKIE_NAME}=${req.params.token}; Max-Age=${Math.floor(remainingMs / 1000)}; Path=/; HttpOnly; SameSite=Lax`
-    );
-    return res.end(`<!doctype html>
+      // Complete les anciens tokens crees avant l'ajout de tenantId.
+      if (!launchEntry.tenantId) {
+        launchEntry.tenantId = req.auth.tenantId;
+        persistState();
+      }
+
+      const allowed =
+        await sessionRepository.canUserAccessSession(
+          launchEntry.sessionId,
+          req.auth.userId,
+          req.auth.tenantId
+        );
+
+      if (!allowed) {
+        return res
+          .status(403)
+          .send(
+            'Acces refuse a cette session'
+          );
+      }
+
+      const databaseSession =
+        await sessionRepository.getSessionById(
+          launchEntry.sessionId
+        );
+
+      if (
+        !databaseSession ||
+        !databaseSession.access_url ||
+        databaseSession.status !== 'ready'
+      ) {
+        return res
+          .status(503)
+          .send(
+            'Session OpenWebUI indisponible'
+          );
+      }
+
+      await assertLocalAdminReady(
+        launchEntry.sessionId
+      );
+
+      const jwt =
+        await ensureOpenWebUiJwt(
+          launchEntry.sessionId
+        );
+
+      const remainingMs = Math.max(
+        60 * 1000,
+        new Date(
+          launchEntry.expiresAt
+        ).getTime() - Date.now()
+      );
+
+      const redirectPath =
+        `/?privalyse_session=${encodeURIComponent(
+          launchEntry.sessionId
+        )}`;
+
+      res.setHeader(
+        'Content-Type',
+        'text/html; charset=utf-8'
+      );
+      res.setHeader(
+        'Cache-Control',
+        'no-store'
+      );
+      res.setHeader(
+        'Set-Cookie',
+        `${PROXY_COOKIE_NAME}=${req.params.token}; ` +
+        `Max-Age=${Math.floor(remainingMs / 1000)}; ` +
+        'Path=/; HttpOnly; SameSite=Lax'
+      );
+
+      return res.end(`<!doctype html>
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="refresh" content="0; url=/" />
-    <title>Ouverture de la session</title>
+    <meta http-equiv="refresh" content="0; url=${redirectPath}" />
+    <title>Ouverture de la session Privalyse</title>
   </head>
   <body>
     <script>
@@ -2723,75 +3272,44 @@ if (
         sessionStorage.setItem('token', ${JSON.stringify(jwt)});
         window.localStorage.token = ${JSON.stringify(jwt)};
       } catch (error) {}
-      window.location.replace('/');
+      window.location.replace(${JSON.stringify(redirectPath)});
     </script>
   </body>
 </html>`);
-  } catch (error) {
-    return res.status(409).send(error.message);
+    } catch (error) {
+      return res
+        .status(error.statusCode || 409)
+        .send(error.message);
+    }
   }
-});
-
-proxyApp.get('/auth', (req, res, next) => {
-  const cookieToken = getCookieValue(
-    req,
-    PROXY_COOKIE_NAME
-  );
-  const launchEntry = cookieToken
-  ? sessionSecrets.launchTokens[cookieToken]
-  : null;
-
-  if (
-   req.auth &&
-   launchEntry &&
-   launchEntry.userId === req.auth.userId &&
-   new Date(launchEntry.expiresAt).getTime() > Date.now() &&
-   sessionSecrets.jwt
-  ) {
-    return res.redirect('/');
-  }
-
-  return next();
-});
+);
 
 proxyApp.use(async (req, res) => {
   try {
-    assertLocalAdminReady();
+    const proxyContext =
+      await resolveAuthorizedProxyContext(
+        req,
+        req.originalUrl
+      );
 
-    const cookieToken = getCookieValue(
-      req,
-      PROXY_COOKIE_NAME
-    );
-    const launchEntry = cookieToken
-    ? sessionSecrets.launchTokens[cookieToken]
-    : null;
-
-   if (
-  !req.auth ||
-  !launchEntry ||
-  launchEntry.userId !== req.auth.userId ||
-  new Date(launchEntry.expiresAt).getTime() <= Date.now() ||
-  !sessionSecrets.jwt
-) {
-      return res
-        .status(403)
-        .send(
-          'Ouverture automatique invalide. Reviens dans Privalyse.'
-        );
-    }
-
-    const jwt = await ensureOpenWebUiJwt();
+    const jwt =
+      await ensureOpenWebUiJwt(
+        proxyContext.sessionId
+      );
 
     return proxyRequestToOpenWebUi(
       req,
       res,
-      jwt
+      jwt,
+      proxyContext
     );
   } catch (error) {
     return res
-      .status(502)
+      .status(error.statusCode || 502)
       .send(
-        `Proxy OpenWebUI indisponible: ${error.message}`
+        error.statusCode
+          ? error.message
+          : `Proxy OpenWebUI indisponible: ${error.message}`
       );
   }
 });
@@ -2805,7 +3323,7 @@ app.listen(PORT, () => {
   console.log(`Serveur backend demarre sur http://localhost:${PORT}`);
   console.log(`Dossier Terraform : ${TERRAFORM_DIR}`);
   if (ADMIN_TOKEN_ENABLED) {
-    console.log( 'Token administrateur Privalyse actif');
+    console.log('Token administrateur Privalyse actif');
   } else {
     console.log('Mode sans token admin actif pour cette session');
   }
@@ -2815,7 +3333,17 @@ const proxyServer = proxyApp.listen(PROXY_PORT, () => {
   console.log(`Passerelle OpenWebUI demarree sur http://localhost:${PROXY_PORT}`);
 });
 
-proxyServer.on('upgrade', proxyUpgradeToOpenWebUi);
+proxyServer.on(
+  'upgrade',
+  proxyUpgradeToOpenWebUi
+);
+
+proxyServer.on(
+  'clientError',
+  (_error, socket) => {
+    destroySocketQuietly(socket);
+  }
+);
 const expiredSessionCleanupTimer = setInterval(
   () => {
     cleanupExpiredSessions().catch((error) => {

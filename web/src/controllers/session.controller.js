@@ -3,7 +3,7 @@ const sessionRepository = require(
 );
 
 /**
- * Liste les sessions du tenant connecté.
+ * Liste uniquement les sessions accessibles par l’utilisateur connecté.
  */
 async function listSessions(
   request,
@@ -11,8 +11,10 @@ async function listSessions(
 ) {
   try {
     const sessions =
-      await sessionRepository.listSessionsByTenantId(
-        request.auth.tenantId
+      await sessionRepository.listSessionsForUser(
+        request.auth.userId,
+        request.auth.tenantId,
+        false
       );
 
     return response.status(200).json({

@@ -229,9 +229,7 @@ async function createSession(session) {
         slug,
         status,
         terraform_directory,
-        expires_at,
-        session_mode,
-        group_id
+        expires_at
       )
       VALUES (
         $1,
@@ -241,9 +239,7 @@ async function createSession(session) {
         $5,
         $6,
         $7,
-        $8,
-        $9,
-        $10
+        $8
       )
       RETURNING *
     `,
@@ -256,8 +252,6 @@ async function createSession(session) {
       session.status || 'queued',
       session.terraformDirectory || null,
       session.expiresAt || null,
-      session.sessionMode || 'individual',
-      session.groupId || null,
     ]
   );
 
@@ -299,6 +293,65 @@ async function listSessionsByTenantId(tenantId) {
 
   return result.rows;
 }
+
+/**
+ * Retourne uniquement les sessions auxquelles un utilisateur a accès.
+ * Une session d'équipe apparaît donc chez chacun de ses membres grâce
+ * à la table session_users.
+ *
+ * @param {string} userId Identifiant utilisateur.
+ * @param {string} tenantId Identifiant du tenant.
+ * @param {boolean} includeDestroyed Inclure les sessions détruites.
+ * @returns {Promise<object[]>}
+ */
+async function listSessionsForUser(
+  userId,
+  tenantId,
+  includeDestroyed = false
+) {
+  const destroyedFilter = includeDestroyed
+    ? ''
+    : "AND sessions.status <> 'destroyed'";
+
+  const result = await database.query(
+    `
+      SELECT
+        sessions.id,
+        sessions.tenant_id,
+        sessions.created_by_user_id,
+        sessions.name,
+        sessions.slug,
+        sessions.status,
+        sessions.instance_id,
+        sessions.elastic_ip,
+        sessions.dns_name,
+        sessions.access_url,
+        sessions.terraform_directory,
+        sessions.created_at,
+        sessions.updated_at,
+        sessions.expires_at,
+        sessions.destroyed_at,
+        COUNT(all_members.user_id)::int AS member_count
+      FROM sessions
+      INNER JOIN session_users AS user_access
+        ON user_access.session_id = sessions.id
+        AND user_access.user_id = $1
+      LEFT JOIN session_users AS all_members
+        ON all_members.session_id = sessions.id
+      WHERE sessions.tenant_id = $2
+        ${destroyedFilter}
+      GROUP BY sessions.id
+      ORDER BY sessions.created_at DESC
+    `,
+    [
+      userId,
+      tenantId,
+    ]
+  );
+
+  return result.rows;
+}
+
 /**
  * Met à jour le statut d’une session PostgreSQL.
  *
@@ -343,7 +396,7 @@ async function getSessionById(sessionId) {
   return result.rows[0] || null;
 }
 /**
- * Enregistre les informations d'infrastructure OVH d'une session.
+ * Enregistre les informations d'infrastructure OpenStack d'une session.
  *
  * @param {string} sessionId Identifiant de la session.
  * @param {object} infrastructure Données retournées par Terraform.
@@ -545,6 +598,7 @@ module.exports = {
   addUserToSession,
   createSession,
   listSessionsByTenantId,
+  listSessionsForUser,
   getSessionState,
   markSessionDestroyed,
   getDraftSessionState,
