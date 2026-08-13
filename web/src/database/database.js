@@ -84,7 +84,8 @@ async function testConnection() {
 }
 
 /**
- * Ferme les connexions PostgreSQL.
+ * Ferme les connexions PostgreSQL. Le pool est réinitialisé et pourra être
+ * recréé lors du prochain accès.
  */
 async function close() {
   if (!pool) {
