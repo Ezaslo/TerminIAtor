@@ -591,28 +591,13 @@ function renderSessionSummary(
     `<div class="session-detail"><span>Expiration</span><strong>${escapeHtml(formatDateTime(expiresAt))}</strong></div></div>` +
     (status === 'provisioning' ? '<div class="indeterminate-progress" aria-label="Préparation en cours"></div>' : '') +
     (status === 'ready' && activeSession?.autoOpenAvailable
-      ? `<div class="session-inline-link">Accès disponible · <a href="#" id="sessionAccessLink">Ouvrir l’espace</a></div>`
+      ? '<div class="session-inline-link">Accès disponible</div>'
       : '');
 
   if (openSessionBtn) {
     openSessionBtn.disabled = !canOpen;
   }
 
-  const sessionAccessLink =
-    document.getElementById('sessionAccessLink');
-
-  if (sessionAccessLink) {
-    sessionAccessLink.addEventListener('click', (event) => {
-      event.preventDefault();
-
-      if (
-        openSessionBtn &&
-        !openSessionBtn.disabled
-      ) {
-        openSessionBtn.click();
-      }
-    });
-  }
 }
 
 async function refreshSessionSummary() {
