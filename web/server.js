@@ -46,6 +46,10 @@ const authMiddleware = require(
 );
 const app = express();
 const proxyApp = express();
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+  proxyApp.set('trust proxy', 1);
+}
 proxyApp.use(authMiddleware.authenticate);
 
 const PORT = config.port;
@@ -1306,13 +1310,8 @@ async function getOpenWebUiBaseUrl(sessionId) {
   }
 }
 
-function getProxyBaseUrl(req = null) {
-  if (config.proxyBaseUrl) {
-    return config.proxyBaseUrl;
-  }
-
-  const host = req?.hostname || 'localhost';
-  return `http://${host}:${PROXY_PORT}`;
+function getProxyBaseUrl() {
+  return config.proxyBaseUrl;
 }
 
 function getCookieValue(req, name) {
