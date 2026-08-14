@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const database = require('./src/database/database');
 const healthRoutes = require('./src/routes/health.routes');
 
@@ -135,19 +136,151 @@ app.use(express.static('public'));
 
 const clients = [];
 
-// Une seule opération Terraform est encore exécutée à la fois dans ce MVP,
-// mais son contexte est maintenant explicitement rattaché à l'utilisateur
-// et à la session concernés. Cela évite d'exposer son état aux autres comptes.
-const currentOperation = {
-  type: 'idle',
-  status: 'idle',
-  phase: 'idle',
-  cancelReadiness: false,
-  sessionId: null,
-  userId: null,
-  tenantId: null,
-  logs: []
-};
+// Les opérations Terraform sont isolées par session.
+// AsyncLocalStorage permet aux logs Terraform/readiness de rester rattachés
+// à la bonne opération même lorsque plusieurs workspaces sont provisionnés
+// en parallèle.
+const operationContext = new AsyncLocalStorage();
+const sessionOperations = new Map();
+const pendingDeployOperationsByUser = new Map();
+
+function createOperation({
+  type,
+  sessionId = null,
+  userId = null,
+  tenantId = null,
+}) {
+  return {
+    id: crypto.randomUUID(),
+    type,
+    status: 'running',
+    phase: 'terraform',
+    cancelReadiness: false,
+    sessionId,
+    userId,
+    tenantId,
+    logs: [],
+    startedAt: new Date().toISOString(),
+  };
+}
+
+function getCurrentOperation() {
+  return operationContext.getStore() || null;
+}
+
+function getRunningOperationForSession(sessionId) {
+  if (!sessionId) return null;
+
+  const operation = sessionOperations.get(sessionId) || null;
+
+  return operation?.status === 'running'
+    ? operation
+    : null;
+}
+
+function getRunningDeployForUser(userId) {
+  if (!userId) return null;
+
+  const operation =
+    pendingDeployOperationsByUser.get(userId) || null;
+
+  if (
+    operation?.type === 'deploy' &&
+    operation.status === 'running'
+  ) {
+    return operation;
+  }
+
+  for (const candidate of sessionOperations.values()) {
+    if (
+      candidate.userId === userId &&
+      candidate.type === 'deploy' &&
+      candidate.status === 'running'
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function bindOperationToSession(operation, sessionId) {
+  if (!operation || !sessionId) return;
+
+  operation.sessionId = sessionId;
+  sessionOperations.set(sessionId, operation);
+
+  if (
+    operation.userId &&
+    pendingDeployOperationsByUser.get(operation.userId) === operation
+  ) {
+    pendingDeployOperationsByUser.delete(operation.userId);
+  }
+}
+
+function getVisibleOperationForUser(
+  userId,
+  accessibleSessions = []
+) {
+  const pending =
+    pendingDeployOperationsByUser.get(userId) || null;
+
+  if (pending?.status === 'running') {
+    return pending;
+  }
+
+  const accessibleSessionIds = new Set(
+    accessibleSessions
+      .map((session) => session?.id)
+      .filter(Boolean)
+  );
+
+  const candidates = Array.from(
+    sessionOperations.values()
+  ).filter((operation) =>
+    operation.userId === userId ||
+    accessibleSessionIds.has(operation.sessionId)
+  );
+
+  candidates.sort((left, right) => {
+    const runningDifference =
+      Number(right.status === 'running') -
+      Number(left.status === 'running');
+
+    if (runningDifference !== 0) {
+      return runningDifference;
+    }
+
+    return (
+      new Date(right.startedAt).getTime() -
+      new Date(left.startedAt).getTime()
+    );
+  });
+
+  return candidates[0] || null;
+}
+
+function getReplayLogsForUser(userId) {
+  const operations = new Set(
+    sessionOperations.values()
+  );
+
+  const pending =
+    pendingDeployOperationsByUser.get(userId);
+
+  if (pending) {
+    operations.add(pending);
+  }
+
+  return Array.from(operations)
+    .filter((operation) => operation.userId === userId)
+    .flatMap((operation) => operation.logs)
+    .sort(
+      (left, right) =>
+        new Date(left.timestamp).getTime() -
+        new Date(right.timestamp).getTime()
+    );
+}
 
 const sessionState = {
   active: false,
@@ -464,16 +597,33 @@ function assertHeaderName(value, fieldName) {
   return trimmed;
 }
 
-function pushLog(message, type = 'info') {
+function pushLog(
+  message,
+  type = 'info',
+  operationOverride = null
+) {
+  const operation =
+    operationOverride || getCurrentOperation();
+
   const log = {
     message,
     type,
     timestamp: new Date().toISOString(),
-    sessionId: currentOperation.sessionId || null,
-    userId: currentOperation.userId || null,
+    sessionId: operation?.sessionId || null,
+    userId: operation?.userId || null,
   };
 
-  currentOperation.logs.push(log);
+  if (operation) {
+    operation.logs.push(log);
+
+    // Evite une croissance mémoire illimitée sur les opérations longues.
+    if (operation.logs.length > 1000) {
+      operation.logs.splice(
+        0,
+        operation.logs.length - 1000
+      );
+    }
+  }
 
   // Les logs d'une création/destruction ne sont envoyés qu'au compte
   // qui a déclenché l'opération. Les logs de maintenance sans userId
@@ -610,16 +760,27 @@ async function destroyInfraInternal(
   sessionId,
   reason = 'manual'
 ) {
-  currentOperation.type = 'destroy';
-  currentOperation.status = 'running';
-  currentOperation.phase = 'terraform';
-  currentOperation.cancelReadiness = false;
-  currentOperation.sessionId = sessionId;
-  currentOperation.logs = [];
+  let operation = getCurrentOperation();
+
+  if (!operation) {
+    operation = createOperation({
+      type: 'destroy',
+      sessionId,
+    });
+    bindOperationToSession(operation, sessionId);
+  }
+
+  operation.type = 'destroy';
+  operation.status = 'running';
+  operation.phase = 'terraform';
+  operation.cancelReadiness = false;
+  operation.sessionId = sessionId;
+  operation.logs = [];
 
   pushLog(
     `Destruction complete demandee pour la session ${sessionId} (${reason})`,
-    'info'
+    'info',
+    operation
   );
 
   let destroySucceeded = false;
@@ -685,11 +846,11 @@ async function destroyInfraInternal(
       persistState();
     }
 
-    currentOperation.status =
+    operation.status =
       destroySucceeded ? 'success' : 'error';
-    currentOperation.phase = 'idle';
-    currentOperation.type =
-      destroySucceeded ? 'idle' : currentOperation.type;
+    operation.phase = 'idle';
+    operation.type =
+      destroySucceeded ? 'idle' : operation.type;
   }
 }
 
@@ -702,9 +863,9 @@ function scheduleDestroyFromTtl(
   const ttlMs = hours * 60 * 60 * 1000;
 
   const runDestroy = async () => {
-    // Terraform reste sérialisé dans ce MVP. Si une autre opération tourne,
-    // on décale ce TTL d'une minute au lieu de perdre définitivement le timer.
-    if (currentOperation.status === 'running') {
+    // On ne bloque plus les autres sessions. Seule une opération déjà active
+    // sur cette même session repousse sa destruction TTL.
+    if (getRunningOperationForSession(sessionId)) {
       const retryTimer = setTimeout(
         runDestroy,
         60 * 1000
@@ -713,26 +874,36 @@ function scheduleDestroyFromTtl(
       return;
     }
 
-    currentOperation.sessionId = sessionId;
-    currentOperation.userId = null;
-    currentOperation.tenantId = null;
+    const operation = createOperation({
+      type: 'destroy',
+      sessionId,
+      userId: null,
+      tenantId: null,
+    });
 
-    pushLog(
-      `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
-      'info'
+    bindOperationToSession(operation, sessionId);
+
+    await operationContext.run(
+      operation,
+      async () => {
+        pushLog(
+          `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
+          'info'
+        );
+
+        try {
+          await destroySessionInternal(
+            sessionId,
+            'ttl'
+          );
+        } catch (error) {
+          operation.status = 'error';
+          operation.phase = 'idle';
+          operation.cancelReadiness = false;
+          persistState();
+        }
+      }
     );
-
-    try {
-      await destroySessionInternal(
-        sessionId,
-        'ttl'
-      );
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
-      persistState();
-    }
   };
 
   const timer = setTimeout(runDestroy, ttlMs);
@@ -743,15 +914,6 @@ function scheduleDestroyFromTtl(
  * PostgreSQL dont la date d'expiration est dépassée.
  */
 async function cleanupExpiredSessions() {
-  if (currentOperation.status === 'running') {
-    pushLog(
-      'Nettoyage des sessions expirées reporté : une opération est déjà en cours.',
-      'info'
-    );
-
-    return;
-  }
-
   const expiredSessions =
     await sessionRepository.listExpiredSessions(10);
 
@@ -765,39 +927,57 @@ async function cleanupExpiredSessions() {
   );
 
   for (const expiredSession of expiredSessions) {
-    if (currentOperation.status === 'running') {
-      break;
+    // Un deploy/destroy actif ne bloque que sa propre session.
+    if (
+      getRunningOperationForSession(
+        expiredSession.id
+      )
+    ) {
+      continue;
     }
 
-    try {
-      currentOperation.sessionId = expiredSession.id;
-      currentOperation.userId = null;
-      currentOperation.tenantId = null;
+    const operation = createOperation({
+      type: 'destroy',
+      sessionId: expiredSession.id,
+      userId: null,
+      tenantId: null,
+    });
 
-      pushLog(
-        `Destruction automatique de la session expirée ${expiredSession.id}.`,
-        'info'
-      );
+    bindOperationToSession(
+      operation,
+      expiredSession.id
+    );
 
-      await destroySessionInternal(
-        expiredSession.id,
-        'expired-cleanup'
-      );
+    await operationContext.run(
+      operation,
+      async () => {
+        try {
+          pushLog(
+            `Destruction automatique de la session expirée ${expiredSession.id}.`,
+            'info'
+          );
 
-      pushLog(
-        `Session expirée ${expiredSession.id} détruite.`,
-        'success'
-      );
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
+          await destroySessionInternal(
+            expiredSession.id,
+            'expired-cleanup'
+          );
 
-      pushLog(
-        `Impossible de détruire la session expirée ${expiredSession.id} : ${error.message}`,
-        'error'
-      );
-    }
+          pushLog(
+            `Session expirée ${expiredSession.id} détruite.`,
+            'success'
+          );
+        } catch (error) {
+          operation.status = 'error';
+          operation.phase = 'idle';
+          operation.cancelReadiness = false;
+
+          pushLog(
+            `Impossible de détruire la session expirée ${expiredSession.id} : ${error.message}`,
+            'error'
+          );
+        }
+      }
+    );
   }
 }
 function restorePersistedSession() {
@@ -826,11 +1006,11 @@ app.get(
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    currentOperation.logs
-      .filter((log) => log.userId === req.auth.userId)
-      .forEach((log) => {
-        res.write(`data: ${JSON.stringify(log)}\n\n`);
-      });
+    getReplayLogsForUser(
+      req.auth.userId
+    ).forEach((log) => {
+      res.write(`data: ${JSON.stringify(log)}\n\n`);
+    });
 
     const client = {
       res,
@@ -908,12 +1088,10 @@ app.get(
         };
       }
 
-      const operationVisible =
-        currentOperation.userId === req.auth.userId ||
-        (
-          session &&
-          currentOperation.sessionId ===
-            session.databaseSessionId
+      const visibleOperation =
+        getVisibleOperationForUser(
+          req.auth.userId,
+          accessibleSessions
         );
 
       return res.json({
@@ -931,12 +1109,12 @@ app.get(
               : 'individual',
           memberCount: Number(item.member_count || 1),
         })),
-        operation: operationVisible
+        operation: visibleOperation
           ? {
-              type: currentOperation.type,
-              status: currentOperation.status,
-              phase: currentOperation.phase,
-              sessionId: currentOperation.sessionId,
+              type: visibleOperation.type,
+              status: visibleOperation.status,
+              phase: visibleOperation.phase,
+              sessionId: visibleOperation.sessionId,
             }
           : {
               type: 'idle',
@@ -1190,12 +1368,15 @@ function runTerraform(
   extraEnvironment = {},
   workingDirectory = TERRAFORM_DIR
 ) {
+  const operation = getCurrentOperation();
+
   return terraformService.runTerraform(
     argumentsList,
     {
       workingDirectory,
       extraEnvironment,
-      onLog: pushLog,
+      onLog: (message, type = 'info') =>
+        pushLog(message, type, operation),
     }
   );
 }
@@ -1204,17 +1385,22 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForOperationToLeaveRunning(timeoutMs = 30000) {
+async function waitForOperationToLeaveRunning(
+  operation,
+  timeoutMs = 30000
+) {
+  if (!operation) return true;
+
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (currentOperation.status !== 'running') {
+    if (operation.status !== 'running') {
       return true;
     }
     await sleep(200);
   }
 
-  return currentOperation.status !== 'running';
+  return operation.status !== 'running';
 }
 
 function checkHttpStatus(url, acceptedStatuses = [200]) {
@@ -1946,6 +2132,8 @@ async function waitForIaReady(
   ip,
   expectedModel = null
 ) {
+  const operation = getCurrentOperation();
+
   const openWebUiUrl =
     `http://${ip}:3000/`;
 
@@ -1970,7 +2158,7 @@ async function waitForIaReady(
     attempt <= maxAttempts;
     attempt += 1
   ) {
-    if (currentOperation.cancelReadiness) {
+    if (operation?.cancelReadiness) {
       pushLog(
         'Attente readiness interrompue a la demande utilisateur',
         'info'
@@ -2025,7 +2213,7 @@ async function waitForIaReady(
         waited += sliceMs
       ) {
         if (
-          currentOperation.cancelReadiness
+          operation?.cancelReadiness
         ) {
           pushLog(
             'Attente readiness interrompue a la demande utilisateur',
@@ -2119,15 +2307,34 @@ const owuiPassword =
 const teamSizeHint =
   sessionMode === 'team' ? 3 : 1;
 
-if (currentOperation.status === 'running') {
+const existingDeployOperation =
+  getRunningDeployForUser(req.auth.userId);
+
+if (existingDeployOperation) {
   return res.status(409).json({
     ok: false,
-    error: `Operation ${currentOperation.type} deja en cours`
+    error:
+      'Un deploiement est deja en cours pour votre compte'
   });
 }
 
-let groupMembers = [];
-let selectedGroup = null;
+const deployOperation = createOperation({
+  type: 'deploy',
+  userId: req.auth.userId,
+  tenantId: req.auth.tenantId,
+});
+
+pendingDeployOperationsByUser.set(
+  req.auth.userId,
+  deployOperation
+);
+
+return operationContext.run(
+  deployOperation,
+  async () => {
+    try {
+      let groupMembers = [];
+      let selectedGroup = null;
 
 if (sessionMode === 'team') {
   selectedGroup =
@@ -2310,14 +2517,11 @@ if (!INSTANCE_TYPES.has(instanceType)) {
   let sessionTerraformDirectory = null;
 
   try {
-    currentOperation.type = 'deploy';
-    currentOperation.status = 'running';
-    currentOperation.phase = 'terraform';
-    currentOperation.cancelReadiness = false;
-    currentOperation.sessionId = null;
-    currentOperation.userId = req.auth.userId;
-    currentOperation.tenantId = req.auth.tenantId;
-    currentOperation.logs = [];
+    deployOperation.type = 'deploy';
+    deployOperation.status = 'running';
+    deployOperation.phase = 'terraform';
+    deployOperation.cancelReadiness = false;
+    deployOperation.logs = [];
 
     databaseSession =
     await sessionRepository.createSession({
@@ -2355,7 +2559,10 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       req.auth.userId
     );
 
-    currentOperation.sessionId = databaseSession.id;
+    bindOperationToSession(
+      deployOperation,
+      databaseSession.id
+    );
    if (sessionMode === 'team') {
   for (const member of groupMembers) {
     await sessionRepository.addUserToSession(
@@ -2602,7 +2809,7 @@ sessionState.groupId =
       deleteLaunchTokensForSession(databaseSession.id);
       persistState();
 
-    currentOperation.phase = 'readiness';
+    deployOperation.phase = 'readiness';
 
 const readiness =
   await waitForIaReady(
@@ -2611,10 +2818,10 @@ const readiness =
   );
 
 if (readiness.cancelled) {
-  currentOperation.type = 'idle';
-  currentOperation.status = 'idle';
-  currentOperation.phase = 'idle';
-  currentOperation.cancelReadiness = false;
+  deployOperation.type = 'idle';
+  deployOperation.status = 'idle';
+  deployOperation.phase = 'idle';
+  deployOperation.cancelReadiness = false;
 
   pushLog(
     'Deploy interrompu pendant la readiness pour permettre une destruction',
@@ -2661,9 +2868,9 @@ persistState();
     'Impossible de recuperer instance_public_ip'
   );
 }
-    currentOperation.status = 'success';
-    currentOperation.phase = 'idle';
-    currentOperation.cancelReadiness = false;
+    deployOperation.status = 'success';
+    deployOperation.phase = 'idle';
+    deployOperation.cancelReadiness = false;
        if (databaseSession) {
       await sessionRepository.updateSessionStatus(
         databaseSession.id,
@@ -2674,7 +2881,7 @@ persistState();
         databaseSession.id
       );
     }
-    currentOperation.type = 'idle';
+    deployOperation.type = 'idle';
     scheduleDestroyFromTtl(
       databaseSession.id,
       finalSessionTtlHours
@@ -2689,9 +2896,9 @@ persistState();
     e && e.message ? e.message : e
   );
 
-  currentOperation.status = 'error';
-  currentOperation.phase = 'cleanup';
-  currentOperation.cancelReadiness = false;
+  deployOperation.status = 'error';
+  deployOperation.phase = 'cleanup';
+  deployOperation.cancelReadiness = false;
 
   pushLog(
     `Erreur deploy: ${message}`,
@@ -2787,9 +2994,9 @@ persistState();
     }
   }
 
-  currentOperation.status = 'error';
-  currentOperation.phase = 'idle';
-  currentOperation.cancelReadiness = false;
+  deployOperation.status = 'error';
+  deployOperation.phase = 'idle';
+  deployOperation.cancelReadiness = false;
 
   if (
     /quota|limit exceeded|overlimit|flavor/i.test(
@@ -2815,6 +3022,19 @@ return res.status(500).json({
   error: message,
 });
   }
+    } finally {
+      if (
+        pendingDeployOperationsByUser.get(
+          req.auth.userId
+        ) === deployOperation
+      ) {
+        pendingDeployOperationsByUser.delete(
+          req.auth.userId
+        );
+      }
+    }
+  }
+);
 });
 
 app.post(
@@ -2827,22 +3047,26 @@ app.post(
   async (req, res) => {
     const sessionId = req.sessionId;
 
-    if (currentOperation.status === 'running') {
+    const runningOperation =
+      getRunningOperationForSession(sessionId);
+
+    if (runningOperation) {
       const canInterruptReadiness =
-        currentOperation.type === 'deploy' &&
-        currentOperation.phase === 'readiness' &&
-        currentOperation.sessionId === sessionId;
+        runningOperation.type === 'deploy' &&
+        runningOperation.phase === 'readiness';
 
       if (canInterruptReadiness) {
         pushLog(
           'Destruction demandee pendant les tentatives readiness, interruption en cours...',
-          'info'
+          'info',
+          runningOperation
         );
 
-        currentOperation.cancelReadiness = true;
+        runningOperation.cancelReadiness = true;
 
         const released =
           await waitForOperationToLeaveRunning(
+            runningOperation,
             30000
           );
 
@@ -2857,48 +3081,61 @@ app.post(
         return res.status(409).json({
           ok: false,
           error:
-            `Operation ${currentOperation.type} deja en cours`
+            `Operation ${runningOperation.type} deja en cours sur cette session`
         });
       }
     }
 
-    currentOperation.sessionId = sessionId;
-    currentOperation.userId = req.auth.userId;
-    currentOperation.tenantId = req.auth.tenantId;
+    const destroyOperation = createOperation({
+      type: 'destroy',
+      sessionId,
+      userId: req.auth.userId,
+      tenantId: req.auth.tenantId,
+    });
 
-    try {
-      await destroySessionInternal(
-        sessionId,
-        'manual'
-      );
+    bindOperationToSession(
+      destroyOperation,
+      sessionId
+    );
 
-      return res.json({
-        ok: true,
-        sessionId
-      });
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
+    return operationContext.run(
+      destroyOperation,
+      async () => {
+        try {
+          await destroySessionInternal(
+            sessionId,
+            'manual'
+          );
 
-      pushLog(
-        `Erreur destroy: ${error.message}`,
-        'error'
-      );
+          return res.json({
+            ok: true,
+            sessionId
+          });
+        } catch (error) {
+          destroyOperation.status = 'error';
+          destroyOperation.phase = 'idle';
+          destroyOperation.cancelReadiness = false;
 
-      const statusCode =
-        error.message === 'Session introuvable.'
-          ? 404
-          : error.message ===
-              'Cette session est deja detruite.'
-            ? 409
-            : 500;
+          pushLog(
+            `Erreur destroy: ${error.message}`,
+            'error'
+          );
 
-      return res.status(statusCode).json({
-        ok: false,
-        error: error.message
-      });
-    }
+          const statusCode =
+            error.message === 'Session introuvable.'
+              ? 404
+              : error.message ===
+                  'Cette session est deja detruite.'
+                ? 409
+                : 500;
+
+          return res.status(statusCode).json({
+            ok: false,
+            error: error.message
+          });
+        }
+      }
+    );
   }
 );
 
