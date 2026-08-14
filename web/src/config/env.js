@@ -212,23 +212,28 @@ const config = {
     allowedOrigins,
   },
 
-  auth: {
-    cookieName: (
-      process.env.AUTH_COOKIE_NAME ||
-      'terminiator_session'
-    ).trim(),
+ auth: {
+  cookieName: (
+    process.env.AUTH_COOKIE_NAME ||
+    'privalyse_session'
+  ).trim(),
 
-    sessionDurationHours: parseBoundedInteger(
-      process.env.AUTH_SESSION_HOURS,
-      'AUTH_SESSION_HOURS',
-      1,
-      168,
-      8
-    ),
+  cookieDomain: (
+    process.env.AUTH_COOKIE_DOMAIN ||
+    ''
+  ).trim() || null,
 
-    secureCookies:
-      process.env.NODE_ENV === 'production',
-  },
+  sessionDurationHours: parseBoundedInteger(
+    process.env.AUTH_SESSION_HOURS,
+    'AUTH_SESSION_HOURS',
+    1,
+    168,
+    8
+  ),
+
+  secureCookies:
+    process.env.NODE_ENV === 'production',
+},
 
   mfa: {
     encryptionKey: loadMfaEncryptionKey(),
