@@ -1,214 +1,36 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
     <script src="/auth-guard.js"></script>
     <script src="/auth-toolbar.js" defer></script>
-
-    <title>Privalyse - Espace d'analyse sécurisé</title>
+    <title>Privalyse — Secure AI Workspace</title>
     <link rel="stylesheet" href="style.css" />
 </head>
-
 <body>
-    <div class="app">
-        <header class="header">
-            <h1>Privalyse</h1>
-            <p>
-                Créer un espace temporaire pour analyser vos documents sensibles.
-            </p>
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="#main-content" aria-label="Privalyse, accueil"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 3.5 26 7v7.6c0 6.2-3.8 11.7-10 14-6.2-2.3-10-7.8-10-14V7l10-3.5Z"/><path d="m11 16 3.1 3.1L21.5 12"/></svg></span><span class="brand-copy"><strong>Privalyse</strong><small>Secure AI Workspace</small></span></a>
+            <nav class="topnav" aria-label="Navigation principale"><span class="topnav-active"><span class="nav-dot"></span>Accueil</span></nav>
+            <div id="auth-toolbar" class="auth-toolbar-slot" aria-live="polite"></div>
         </header>
-
-        <main>
-            <section class="workspace-section">
-                <h2>Nouvel espace d'analyse</h2>
-
-                <p class="helper-text">
-                    Renseigne ton besoin. Privalyse configure automatiquement
-                    l'environnement nécessaire.
-                </p>
-
-                <div class="credentials-form">
-                    <div class="credential-field">
-                        <label for="workspaceName">Nom de l'espace</label>
-
-                        <input
-                            type="text"
-                            id="workspaceName"
-                            placeholder="Analyse des contrats fournisseurs"
-                            value="Analyse de contrats"
-                            maxlength="100"
-                        />
-                    </div>
-                </div>
-            </section>
-
-            <section class="access-section">
-                <h2>Mode de travail</h2>
-
-                <p class="helper-text">
-                    Choisis si cet espace est réservé à ton usage ou partagé avec une équipe.
-                </p>
-
-                <div class="credentials-form">
-                    <label class="choice-card">
-                        <input
-                            type="radio"
-                            name="sessionMode"
-                            value="individual"
-                            checked
-                        />
-
-                        <span>
-                            <strong>Individuel</strong><br />
-                            <small>Un espace privé réservé à votre compte.</small>
-                        </span>
-                    </label>
-
-                    <label class="choice-card">
-                        <input
-                            type="radio"
-                            name="sessionMode"
-                            value="team"
-                        />
-
-                        <span>
-                            <strong>À l'équipe</strong><br />
-                            <small>Un espace partagé avec un groupe autorisé.</small>
-                        </span>
-                    </label>
-                </div>
-
-                <div
-                    id="groupSection"
-                    class="credentials-form"
-                    style="display: none; margin-top: 1rem;"
-                >
-                    <div class="credential-field">
-                        <label for="groupId">Groupe autorisé</label>
-
-                        <select id="groupId">
-                            <option value="">Sélectionner un groupe</option>
-                        </select>
-
-                        <p id="groupDescription" class="helper-text">
-                            Les groupes disponibles seront chargés depuis Privalyse.
-                        </p>
-                    </div>
-                </div>
-            </section>
-
-            <section class="workspace-section">
-                <h2>Durée de disponibilité</h2>
-
-                <p class="helper-text">
-                    L'espace et ses données seront automatiquement supprimés à expiration.
-                </p>
-
-                <div class="credentials-form">
-                    <div class="credential-field">
-                        <label for="sessionTtlHours">Durée</label>
-
-                        <select id="sessionTtlHours">
-                            <option value="1">1 heure</option>
-                            <option value="3">3 heures</option>
-                            <option value="6" selected>6 heures</option>
-                            <option value="12">12 heures</option>
-                            <option value="24">24 heures</option>
-                        </select>
-                    </div>
-                </div>
-            </section>
-
-            <section class="status-panel">
-                <h2>Résumé</h2>
-
-                <div id="sessionSummaryPreview">
-                    <strong>Analyse de contrats</strong><br />
-                    Mode : Individuel<br />
-                    Durée : 6 heures<br />
-                    Suppression automatique à expiration
-                </div>
-            </section>
-
-            <section class="actions">
-                <button id="deployBtn" class="primary-btn">
-                    Créer l'espace sécurisé
-                </button>
-
-                <button
-                    id="openSessionBtn"
-                    class="primary-btn ghost-btn"
-                    disabled
-                >
-                    Ouvrir l'espace
-                </button>
-
-                <button id="destroyBtn" class="secondary-btn">
-                    Supprimer l'espace
-                </button>
-            </section>
-
-            <section id="sessionSummary" class="status-panel">
-                Aucun espace actif.
-            </section>
-
-            <details id="logsSection" class="logs-section" style="display: none;">
-                <summary>Voir les détails techniques</summary>
-
-                <div id="logs" class="logs-console"></div>
-            </details>
-        </main>
-    </div>
-
-    <div
-        id="deleteModal"
-        class="modal-backdrop"
-        aria-hidden="true"
-    >
-        <div
-            class="modal-card"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="deleteModalTitle"
-            aria-describedby="deleteModalDescription"
-        >
-            <div class="modal-icon" aria-hidden="true">!</div>
-
-            <h2 id="deleteModalTitle">
-                Supprimer l’espace ?
-            </h2>
-
-            <p id="deleteModalDescription">
-                Cette action supprimera définitivement l’espace ainsi que toutes
-                les données qui lui sont associées.
-            </p>
-
-            <p class="modal-warning">
-                Cette action est irréversible.
-            </p>
-
-            <div class="modal-actions">
-                <button
-                    id="cancelDeleteBtn"
-                    type="button"
-                    class="modal-cancel-btn"
-                >
-                    Annuler
-                </button>
-
-                <button
-                    id="confirmDeleteBtn"
-                    type="button"
-                    class="modal-delete-btn"
-                >
-                    Supprimer l’espace
-                </button>
-            </div>
+        <div class="app-layout">
+            <main id="main-content" class="main-content">
+                <section class="hero" aria-labelledby="page-title"><p class="eyebrow"><span class="eyebrow-line"></span>Espace IA privé</p><h1 id="page-title">Analysez vos données sensibles<br />dans un <span>environnement isolé.</span></h1><p class="hero-copy">Privalyse déploie à la demande un espace IA temporaire, isolé et automatiquement supprimé à expiration.</p><div class="hero-badges" aria-label="Garanties"><span>✓ Infrastructure dédiée</span><span>✓ Accès contrôlé</span><span>✓ Destruction automatique</span></div></section>
+                <section class="panel workspace-builder" aria-labelledby="builder-title"><div class="panel-heading"><span class="step-number">01</span><div><h2 id="builder-title">Configurer l'espace</h2><p>Définissez les paramètres de votre environnement sécurisé.</p></div></div><div class="panel-divider"></div><div class="form-stack">
+                    <div class="field-block"><label for="workspaceName">Nom de l'espace</label><p class="field-help">Identifiez facilement cette session dans votre tableau de bord.</p><input type="text" id="workspaceName" placeholder="Analyse des contrats fournisseurs" value="Analyse de contrats" maxlength="100" /></div>
+                    <div class="field-block"><span class="field-label">Mode d'utilisation</span><div class="mode-grid"><label class="mode-card"><input type="radio" name="sessionMode" value="individual" checked /><span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.7-3.6 3-5.4 7-5.4s6.3 1.8 7 5.4"/></svg></span><span class="mode-content"><strong>Individuel</strong><small>Un environnement privé associé uniquement à votre compte.</small><em>Privé</em></span><span class="choice-check">✓</span></label><label class="mode-card"><input type="radio" name="sessionMode" value="team" /><span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 20c.5-3.4 2.4-5.1 5.5-5.1s5 1.7 5.5 5.1M15 14.5c2.8-.1 4.5 1.7 5 4.5"/></svg></span><span class="mode-content"><strong>Équipe</strong><small>Partagez l'environnement avec un groupe Privalyse autorisé.</small><em>Collaboratif</em></span><span class="choice-check">✓</span></label></div></div>
+                    <div id="groupSection" class="field-block group-block" style="display: none;"><div class="group-heading"><div><span class="field-label">Groupe autorisé</span><p id="groupDescription" class="field-help">Les groupes disponibles seront chargés depuis Privalyse.</p></div><span class="info-icon" title="Seuls les groupes autorisés peuvent accéder à cet espace." aria-label="Information">i</span></div><select id="groupId"><option value="">Sélectionner un groupe</option></select></div>
+                    <div class="field-block duration-block"><div><span class="field-label">Durée de disponibilité</span><p class="field-help">Les ressources et données temporaires seront supprimées à la fin de cette période.</p></div><div class="duration-control"><select id="sessionTtlHours"><option value="1">1 heure</option><option value="3">3 heures</option><option value="6" selected>6 heures</option><option value="12">12 heures</option><option value="24">24 heures</option></select><span class="duration-note"><span class="mini-icon">◷</span><span><strong>Destruction automatique</strong><small>Cycle de vie maîtrisé</small></span></span></div></div>
+                </div><div class="summary-preview"><div class="summary-title"><span>Résumé du déploiement</span><span class="summary-secure">● Sécurisé</span></div><div id="sessionSummaryPreview"></div></div><button id="deployBtn" class="btn btn-primary" type="button">Créer l'espace sécurisé <span aria-hidden="true">↗</span></button></section>
+                <section class="panel active-workspace" aria-labelledby="active-title"><div class="panel-heading"><span class="step-number">02</span><div><h2 id="active-title">Votre espace</h2><p>Suivez l'état de votre infrastructure IA.</p></div></div><div class="panel-divider"></div><div id="sessionSummary" class="session-summary">Aucun espace actif.</div><div class="session-actions"><button id="openSessionBtn" class="btn btn-primary" type="button" disabled>Ouvrir l'espace IA <span aria-hidden="true">↗</span></button><button id="destroyBtn" class="btn btn-danger-ghost" type="button">Supprimer l'espace</button></div></section>
+                <details id="logsSection" class="technical-logs" style="display: none;"><summary><span><span class="log-summary-dot"></span>Détails techniques</span><span class="realtime-label">● Temps réel</span></summary><div id="logs" class="logs-console"></div></details>
+            </main>
+            <aside class="sidebar" aria-label="Informations sur l'espace"><section class="side-card security-card"><div class="side-card-heading"><span class="side-icon shield-icon" aria-hidden="true">◇</span><div><h2>Protection de l'espace</h2><span class="status-pill success"><i></i>Protection active</span></div></div><div class="security-list"><div><span>Isolation</span><strong>Instance dédiée</strong></div><div><span>Accès</span><strong>Passerelle Privalyse</strong></div><div><span>Cycle de vie</span><strong>Destruction automatique</strong></div></div><p class="side-note">Les connexions à l'espace IA transitent par la passerelle d'accès Privalyse.</p></section><section class="side-card lifecycle-card"><div class="side-card-heading"><span class="side-icon" aria-hidden="true">◷</span><div><h2>Cycle de vie</h2><p>Un environnement temporaire, maîtrisé de bout en bout.</p></div></div><ol class="lifecycle"><li class="active"><span>1</span><div><strong>Configuration</strong><small>Paramètres de l'espace</small></div></li><li><span>2</span><div><strong>Provisioning</strong><small>Infrastructure isolée</small></div></li><li><span>3</span><div><strong>Utilisation</strong><small>Analyse sécurisée</small></div></li><li><span>4</span><div><strong>Destruction</strong><small>Suppression automatique</small></div></li></ol></section></aside>
         </div>
     </div>
-
+    <div id="deleteModal" class="modal-backdrop" aria-hidden="true"><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle" aria-describedby="deleteModalDescription"><div class="modal-icon" aria-hidden="true">!</div><h2 id="deleteModalTitle">Supprimer cet espace ?</h2><p id="deleteModalDescription">Cette action détruit définitivement l'infrastructure temporaire et les données associées à cette session.</p><p class="modal-warning">Cette opération est irréversible.</p><div class="modal-actions"><button id="cancelDeleteBtn" type="button" class="modal-cancel-btn">Annuler</button><button id="confirmDeleteBtn" type="button" class="modal-delete-btn">Supprimer définitivement</button></div></div></div>
     <script src="script.js"></script>
 </body>
 </html>

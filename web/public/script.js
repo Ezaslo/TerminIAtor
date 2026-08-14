@@ -114,13 +114,15 @@ function updateSummaryPreview() {
   const groupLabel = mode === 'team' ? getGroupLabel() : '';
 
   preview.innerHTML =
-    `<strong>${escapeHtml(workspaceName)}</strong><br />` +
-    `Mode : ${modeLabel}<br />` +
+    `<div class="summary-grid">` +
+    `<div class="summary-item"><span>Nom</span><strong>${escapeHtml(workspaceName)}</strong></div>` +
+    `<div class="summary-item"><span>Mode</span><strong>${modeLabel}</strong></div>` +
     (mode === 'team'
-      ? `Groupe : ${escapeHtml(groupLabel || 'Aucun groupe sélectionné')}<br />`
+      ? `<div class="summary-item"><span>Groupe</span><strong>${escapeHtml(groupLabel || 'Aucun groupe sélectionné')}</strong></div>`
       : '') +
-    `Durée : ${escapeHtml(durationLabel)}<br />` +
-    `Suppression automatique à expiration`;
+    `<div class="summary-item"><span>Durée</span><strong>${escapeHtml(durationLabel)}</strong></div>` +
+    `<div class="summary-item"><span>Sécurité</span><strong>Suppression automatique</strong></div>` +
+    `</div>`;
 }
 async function loadAvailableGroups() {
   const groupSelect =
@@ -359,7 +361,11 @@ function renderSessionSummary(
 
   if (!displayedSession && !isRunning) {
     summary.classList.remove('ready');
-    summary.textContent = 'Aucun espace actif.';
+    summary.classList.add('empty-state');
+    summary.innerHTML =
+      '<span class="empty-icon" aria-hidden="true">◈</span>' +
+      '<strong class="session-title">Aucun espace actif</strong>' +
+      '<span>Configurez un environnement sécurisé pour commencer votre analyse.</span>';
 
     if (openSessionBtn) {
       openSessionBtn.disabled = true;
@@ -404,15 +410,20 @@ function renderSessionSummary(
 
 
 
+  summary.classList.remove('empty-state');
   summary.classList.toggle('ready', status === 'ready');
 
+  const statusClass = status === 'ready' ? 'success' : status === 'provisioning' ? 'warning' : 'neutral';
+  const statusText = status === 'ready' ? 'Prêt' : status === 'provisioning' ? 'Préparation' : 'En attente';
   summary.innerHTML =
-    `<strong>${escapeHtml(statusLabel)}</strong><br />` +
-    `Nom : ${escapeHtml(workspaceName)}<br />` +
-   `Mode : ${sessionMode === 'team' ? 'Équipe' : 'Individuel'}<br />` +
-   `Expiration : ${escapeHtml(formatDateTime(expiresAt))}` +
+    `<div class="session-status"><span class="status-pill ${statusClass}"><i></i>${statusText}</span></div>` +
+    `<strong class="session-title">${escapeHtml(statusLabel)}</strong>` +
+    `<div class="session-details"><span>Nom <strong>${escapeHtml(workspaceName)}</strong></span>` +
+    `<span>Mode <strong>${sessionMode === 'team' ? 'Équipe' : 'Individuel'}</strong></span>` +
+    `<span>Expiration <strong>${escapeHtml(formatDateTime(expiresAt))}</strong></span></div>` +
+    (status === 'provisioning' ? '<div class="indeterminate-progress" aria-label="Préparation en cours"></div>' : '') +
     (status === 'ready' && activeSession?.autoOpenAvailable
-      ? `<br />Accès : <a href="#" id="sessionAccessLink">Ouvrir l’espace</a>`
+      ? `<div class="session-inline-link">Accès disponible · <a href="#" id="sessionAccessLink">Ouvrir l’espace</a></div>`
       : '');
 
   if (openSessionBtn) {
