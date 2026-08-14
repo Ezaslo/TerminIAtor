@@ -683,25 +683,25 @@
       .mfa-recovery-box pre { grid-template-columns: 1fr; }
     }
   </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 
-<body>
-  <main class="container">
-    <a
-      class="back-link"
-      href="/"
-    >
-      Retour à l'acceuil 
-    </a>
+<body class="admin-page">
+  <aside class="sidebar admin-sidebar" aria-label="Navigation principale">
+    <a class="sidebar-brand" href="/" aria-label="Privalyse, accueil"><span class="p-mark" aria-hidden="true"><svg viewBox="0 0 36 36"><path d="M9 31V6h10.5a8.5 8.5 0 0 1 0 17H14"/><path d="M14 11h5.3a3.2 3.2 0 0 1 0 6.4H14"/></svg></span><span><strong>Privalyse</strong><small>Secure AI Workspace</small></span></a>
+    <div class="sidebar-section-label">Navigation</div>
+    <nav class="sidebar-nav admin-sidebar-nav" aria-label="Navigation administration"><a class="nav-item admin-nav-item" href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.5 11 8.5-7 8.5 7v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z"/><path d="M9 21v-6h6v6"/></svg><span>Accueil</span></a><a class="nav-item admin-nav-item active" href="/admin.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h5M8 16h6"/></svg><span>Administration</span></a></nav>
+    <div class="sidebar-bottom"></div>
+  </aside>
+  <main class="container admin-container">
+    <a class="back-link" href="/">← Retour à l'accueil</a>
 
     <header class="page-header">
-      <h1>
-        Administration
-        <span>Privalyse</span>
-      </h1>
+      <p class="admin-eyebrow">Administration</p>
+      <h1>Administration <span>Privalyse</span></h1>
 
       <p>
-        Gérer les utilisateurs, les invitations, et les accés à votre organisation.
+        Gérez les utilisateurs, les groupes et les paramètres de sécurité de votre environnement.
       </p>
     </header>
 
@@ -847,9 +847,6 @@
             inputmode="decimal"
             placeholder="Ex. 0,50"
           >
-          <p class="field-help">
-            Ce tarif sert uniquement à calculer une estimation à l'écran.
-          </p>
         </div>
 
         <button

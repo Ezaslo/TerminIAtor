@@ -4,6 +4,7 @@ let eventSource = null;
 let sessionRefreshInterval = null;
 let lastSubmittedSession = null;
 let currentSessionId = null;
+let lastKnownSession = null;
 
 function authHeaders() {
   return {
@@ -29,6 +30,176 @@ function getSelectedMode() {
 function getDurationLabel() {
   const durationSelect = document.getElementById('sessionTtlHours');
   return durationSelect?.selectedOptions[0]?.textContent.trim() || '6 heures';
+}
+
+function updateWorkspaceNameCount() {
+  const input = document.getElementById('workspaceName');
+  const counter = document.getElementById('workspaceNameCount');
+
+  if (input && counter) {
+    counter.textContent = `${input.value.length} / ${input.maxLength}`;
+  }
+}
+
+function updateWelcomeName(authentication = window.terminiatorAuth) {
+  const target = document.getElementById('welcomeName');
+  const user = authentication?.user;
+
+  if (!target || !user) return;
+
+  const source = user.name || user.email || '';
+  target.textContent = source ? `, ${source.split('@')[0]}` : '';
+}
+
+function setupCustomDurationSelect() {
+  const select = document.getElementById('sessionTtlHours');
+  const host = select?.closest('.select-with-icon');
+
+  if (!select || !host || host.querySelector('[data-custom-select]')) return;
+
+  const custom = document.createElement('div');
+  custom.className = 'custom-select';
+  custom.dataset.customSelect = '';
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'custom-select-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.setAttribute('aria-controls', 'sessionTtlHoursMenu');
+  trigger.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg><span class="custom-select-value"></span><svg class="custom-select-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg>';
+
+  const menu = document.createElement('div');
+  menu.id = 'sessionTtlHoursMenu';
+  menu.className = 'custom-select-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.hidden = true;
+
+  const valueElement = trigger.querySelector('.custom-select-value');
+  const options = Array.from(select.options);
+
+  const sync = () => {
+    const selected = select.selectedOptions[0];
+    valueElement.textContent = selected?.textContent || '';
+    menu.querySelectorAll('[role="option"]').forEach((option) => {
+      const active = option.dataset.value === select.value;
+      option.setAttribute('aria-selected', String(active));
+      option.classList.toggle('is-selected', active);
+    });
+  };
+
+  options.forEach((option) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'option');
+    item.dataset.value = option.value;
+    item.textContent = option.textContent;
+    item.addEventListener('click', () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      sync();
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.focus();
+    });
+    menu.appendChild(item);
+  });
+
+  const close = () => {
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+  };
+
+  trigger.addEventListener('click', () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    trigger.setAttribute('aria-expanded', String(open));
+  });
+
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      close();
+      return;
+    }
+
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(menu.querySelectorAll('[role="option"]'));
+    const current = items.findIndex((item) => item.dataset.value === select.value);
+    const next = event.key === 'ArrowDown' ? Math.min(current + 1, items.length - 1) : Math.max(current - 1, 0);
+    items[next]?.focus();
+  });
+
+  menu.addEventListener('keydown', (event) => {
+    const items = Array.from(menu.querySelectorAll('[role="option"]'));
+    const current = items.indexOf(document.activeElement);
+    if (event.key === 'Escape') {
+      close();
+      trigger.focus();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const next = event.key === 'ArrowDown' ? Math.min(current + 1, items.length - 1) : Math.max(current - 1, 0);
+      items[next]?.focus();
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      items[current]?.click();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!custom.contains(event.target)) close();
+  });
+
+  custom.append(trigger, menu);
+  host.appendChild(custom);
+  select.classList.add('native-duration-select');
+  sync();
+}
+
+function updateLifecycleStepper(session = null, operation = {}) {
+  const steps = Array.from(document.querySelectorAll('.lifecycle li'));
+  if (steps.length < 4) return;
+
+  const isRunning = operation.status === 'running';
+  let activeIndex = 0;
+  let stateLabel = 'Configuration';
+
+  if (isRunning && operation.type === 'destroy') {
+    activeIndex = 3;
+    stateLabel = 'Destruction';
+  } else if (isRunning && operation.type === 'deploy') {
+    activeIndex = 1;
+    stateLabel = 'Provisioning';
+  } else if (session?.status === 'ready') {
+    activeIndex = 2;
+    stateLabel = 'Utilisation';
+  } else if (session?.status === 'provisioning') {
+    activeIndex = 1;
+    stateLabel = 'Provisioning';
+  }
+
+  steps.forEach((step, index) => {
+    const state = index < activeIndex ? 'is-complete' : index === activeIndex ? 'is-active' : 'is-pending';
+    step.dataset.step = ['configuration', 'provisioning', 'utilisation', 'destruction'][index];
+    step.classList.remove('is-pending', 'is-active', 'is-complete');
+    step.classList.add(state);
+    step.setAttribute('aria-current', state === 'is-active' ? 'step' : 'false');
+    const marker = step.querySelector(':scope > span');
+    if (marker) {
+      marker.innerHTML = state === 'is-complete'
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-8"/></svg>'
+        : String(index + 1);
+    }
+  });
+
+  const card = document.querySelector('.lifecycle-card');
+  let status = card?.querySelector('.lifecycle-state');
+  if (card && !status) {
+    status = document.createElement('p');
+    status.className = 'lifecycle-state';
+    card.querySelector('h2')?.after(status);
+  }
+  if (status) status.textContent = `État actuel : ${stateLabel}`;
 }
 
 function getGroupLabel() {
@@ -223,6 +394,7 @@ function setupFormInteractions() {
   const modeInputs = document.querySelectorAll('input[name="sessionMode"]');
 
   workspaceName?.addEventListener('input', updateSummaryPreview);
+  workspaceName?.addEventListener('input', updateWorkspaceNameCount);
   duration?.addEventListener('change', updateSummaryPreview);
   groupId?.addEventListener('change', updateSummaryPreview);
 
@@ -231,6 +403,8 @@ function setupFormInteractions() {
   });
 
   updateGroupVisibility();
+  updateWorkspaceNameCount();
+  setupCustomDurationSelect();
   loadAvailableGroups();
 }
 
@@ -295,8 +469,10 @@ function resetUiForNewOperation(operationType) {
   summary.classList.remove('ready');
 
   if (operationType === 'deploy') {
+    updateLifecycleStepper(lastSubmittedSession, { type: 'deploy', status: 'running' });
     summary.textContent = 'Création de l’espace sécurisé en cours...';
   } else if (operationType === 'destroy') {
+    updateLifecycleStepper(lastKnownSession, { type: 'destroy', status: 'running' });
     summary.textContent = 'Suppression de l’espace en cours...';
   }
 }
@@ -362,6 +538,7 @@ function renderSessionSummary(
   if (!displayedSession && !isRunning) {
     summary.classList.remove('ready');
     summary.classList.add('empty-state');
+    summary.classList.remove('has-session');
     summary.innerHTML =
       '<span class="empty-icon" aria-hidden="true">◈</span>' +
       '<strong class="session-title">Aucun espace actif</strong>' +
@@ -411,6 +588,7 @@ function renderSessionSummary(
 
 
   summary.classList.remove('empty-state');
+  summary.classList.add('has-session');
   summary.classList.toggle('ready', status === 'ready');
 
   const statusClass = status === 'ready' ? 'success' : status === 'provisioning' ? 'warning' : 'neutral';
@@ -457,8 +635,13 @@ async function refreshSessionSummary() {
 
     currentSessionId =
       data.session?.databaseSessionId || null;
+    lastKnownSession = data.session || data.draftSession || null;
 
     applyOperationState(data.operation || {});
+    updateLifecycleStepper(
+      data.session || data.draftSession || null,
+      data.operation || {}
+    );
     renderSessionSummary(
       data.session || null,
       data.draftSession || null,
@@ -843,9 +1026,15 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDeployButton();
   setupOpenSessionButton();
   setupDestroyButton();
+  updateLifecycleStepper(null, {});
 
   connectLogStream();
   refreshSessionSummary();
+  updateWelcomeName();
+
+  document.addEventListener('terminiator:authenticated', (event) => {
+    updateWelcomeName(event.detail);
+  });
 
   sessionRefreshInterval =
     window.setInterval(refreshSessionSummary, 15000);
