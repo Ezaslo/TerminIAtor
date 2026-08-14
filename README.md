@@ -6,7 +6,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-database-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Terraform](https://img.shields.io/badge/Terraform-required-844FBA?logo=terraform&logoColor=white)](https://www.terraform.io/)
 [![OpenStack](https://img.shields.io/badge/OpenStack-API-ED1944?logo=openstack&logoColor=white)](https://www.openstack.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit)
 
 Privalyse fournit une interface web Express pour authentifier des utilisateurs, stocker les tenants, utilisateurs, groupes et sessions dans PostgreSQL, puis piloter Terraform afin de provisionner une VM OpenStack. La VM initialise Ollama et OpenWebUI, et constitue un workspace IA temporaire pouvant être détruit à la fin de sa durée de vie.
 
@@ -349,4 +349,4 @@ Le dépôt fournit les briques applicatives et Terraform, mais pas à lui seul l
 
 ## 27. Licence
 
-Ce projet est distribué sous licence MIT. Voir le fichier `LICENSE` lorsqu'il est présent dans la distribution.
+Le champ `license` du projet déclare la licence MIT. Le dépôt ne contient pas actuellement de fichier `LICENSE`.
