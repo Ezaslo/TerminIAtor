@@ -41,16 +41,6 @@ function updateWorkspaceNameCount() {
   }
 }
 
-function updateWelcomeName(authentication = window.terminiatorAuth) {
-  const target = document.getElementById('welcomeName');
-  const user = authentication?.user;
-
-  if (!target || !user) return;
-
-  const source = user.name || user.email || '';
-  target.textContent = source ? `, ${source.split('@')[0]}` : '';
-}
-
 function setupCustomDurationSelect() {
   const select = document.getElementById('sessionTtlHours');
   const host = select?.closest('.select-with-icon');
@@ -1030,12 +1020,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   connectLogStream();
   refreshSessionSummary();
-  updateWelcomeName();
-
-  document.addEventListener('terminiator:authenticated', (event) => {
-    updateWelcomeName(event.detail);
-  });
-
   sessionRefreshInterval =
     window.setInterval(refreshSessionSummary, 15000);
 });
