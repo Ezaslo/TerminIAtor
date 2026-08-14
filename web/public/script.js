@@ -586,9 +586,9 @@ function renderSessionSummary(
   summary.innerHTML =
     `<div class="session-status"><span class="status-pill ${statusClass}"><i></i>${statusText}</span></div>` +
     `<strong class="session-title">${escapeHtml(statusLabel)}</strong>` +
-    `<div class="session-details"><span>Nom <strong>${escapeHtml(workspaceName)}</strong></span>` +
-    `<span>Mode <strong>${sessionMode === 'team' ? 'Équipe' : 'Individuel'}</strong></span>` +
-    `<span>Expiration <strong>${escapeHtml(formatDateTime(expiresAt))}</strong></span></div>` +
+    `<div class="session-details"><div class="session-detail"><span>Nom</span><strong>${escapeHtml(workspaceName)}</strong></div>` +
+    `<div class="session-detail"><span>Mode</span><strong>${sessionMode === 'team' ? 'Équipe' : 'Individuel'}</strong></div>` +
+    `<div class="session-detail"><span>Expiration</span><strong>${escapeHtml(formatDateTime(expiresAt))}</strong></div></div>` +
     (status === 'provisioning' ? '<div class="indeterminate-progress" aria-label="Préparation en cours"></div>' : '') +
     (status === 'ready' && activeSession?.autoOpenAvailable
       ? `<div class="session-inline-link">Accès disponible · <a href="#" id="sessionAccessLink">Ouvrir l’espace</a></div>`

@@ -14,3 +14,4 @@
 .select-with-icon>svg{display:none}
 .account-menu--logout-only .logout-button{border-top:0!important;border-radius:7px!important;margin-top:0!important;padding-top:0!important;height:40px!important}
 .sidebar-nav a,.admin-sidebar-nav a{text-decoration:none}.sidebar-nav a:hover,.sidebar-nav a:focus,.admin-sidebar-nav a:hover,.admin-sidebar-nav a:focus{text-decoration:none}
+.session-details{display:grid;gap:12px;margin-top:14px}.session-detail{display:flex;flex-direction:column;gap:4px}.session-detail span{color:var(--text-muted);font-size:11px}.session-detail strong{color:var(--text-primary);font-size:13px;font-weight:600;line-height:1.4}
