@@ -105,23 +105,28 @@ async function login(
           null,
       });
 
-    response.cookie(
-      config.auth.cookieName,
-      sessionToken.token,
-      {
-        httpOnly: true,
-        secure:
-          config.auth.secureCookies,
-        sameSite: 'lax',
-        path: '/',
-        maxAge:
-          config.auth
-            .sessionDurationHours *
-          60 *
-          60 *
-          1000,
-      }
-    );
+   response.cookie(
+  config.auth.cookieName,
+  sessionToken.token,
+  {
+    httpOnly: true,
+    secure:
+      config.auth.secureCookies,
+    sameSite: 'lax',
+    path: '/',
+
+    ...(config.auth.cookieDomain
+      ? { domain: config.auth.cookieDomain }
+      : {}),
+
+    maxAge:
+      config.auth
+        .sessionDurationHours *
+      60 *
+      60 *
+      1000,
+  }
+);
 
     return response.status(200).json({
       message: 'Connexion réussie.',
@@ -173,18 +178,20 @@ async function logout(
       .revokeAuthSessionById(
         request.auth.sessionId
       );
+response.clearCookie(
+  config.auth.cookieName,
+  {
+    httpOnly: true,
+    secure:
+      config.auth.secureCookies,
+    sameSite: 'lax',
+    path: '/',
 
-    response.clearCookie(
-      config.auth.cookieName,
-      {
-        httpOnly: true,
-        secure:
-          config.auth.secureCookies,
-        sameSite: 'lax',
-        path: '/',
-      }
-    );
-
+    ...(config.auth.cookieDomain
+      ? { domain: config.auth.cookieDomain }
+      : {}),
+  }
+);
     return response.status(200).json({
       message: 'Déconnexion réussie.',
     });
