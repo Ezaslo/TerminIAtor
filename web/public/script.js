@@ -159,13 +159,13 @@ function updateLifecycleStepper(session = null, operation = {}) {
     stateLabel = 'Destruction';
   } else if (isRunning && operation.type === 'deploy') {
     activeIndex = 1;
-    stateLabel = 'Provisioning';
+    stateLabel = 'Préparation en cours';
   } else if (session?.status === 'ready') {
     activeIndex = 2;
     stateLabel = 'Utilisation';
   } else if (session?.status === 'provisioning') {
     activeIndex = 1;
-    stateLabel = 'Provisioning';
+    stateLabel = 'Préparation en cours';
   }
 
   steps.forEach((step, index) => {
