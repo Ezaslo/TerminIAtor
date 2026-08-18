@@ -440,27 +440,26 @@ async function requireSessionAccess(
   next
 ) {
   try {
-    let sessionId =
+    const sessionId = String(
       req.body?.sessionId ||
       req.params?.sessionId ||
       req.query?.sessionId ||
-      null;
+      ''
+    ).trim();
 
-    if (!sessionId) {
-      const accessibleSessions =
-        await sessionRepository.listSessionsForUser(
-          req.auth.userId,
-          req.auth.tenantId,
-          false
-        );
-
-      sessionId = accessibleSessions[0]?.id || null;
-    }
-
+    // Fail-closed : aucune route de session ne doit choisir
+    // implicitement la première session accessible.
     if (!sessionId) {
       return res.status(400).json({
         ok: false,
         error: 'Identifiant de session manquant'
+      });
+    }
+
+    if (!isUuid(sessionId)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Identifiant de session invalide'
       });
     }
 
@@ -1154,8 +1153,42 @@ app.get(
           false
         );
 
-      const databaseSession =
-        accessibleSessions[0] || null;
+      const ownedActiveSessions =
+        accessibleSessions.filter(
+          (item) =>
+            item.created_by_user_id === req.auth.userId
+        );
+
+      const requestedSessionId =
+        typeof req.query?.sessionId === 'string'
+          ? req.query.sessionId.trim()
+          : '';
+
+      if (requestedSessionId && !isUuid(requestedSessionId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de session invalide'
+        });
+      }
+
+      let databaseSession = null;
+
+      if (requestedSessionId) {
+        databaseSession =
+          accessibleSessions.find(
+            (item) => item.id === requestedSessionId
+          ) || null;
+
+        if (!databaseSession) {
+          return res.status(403).json({
+            ok: false,
+            error: 'Acces refuse a cette session'
+          });
+        }
+      } else if (accessibleSessions.length === 1) {
+        // Sélection automatique uniquement lorsqu'il n'existe aucune ambiguïté.
+        databaseSession = accessibleSessions[0];
+      }
 
       let session = null;
 
@@ -1181,7 +1214,7 @@ app.get(
           authMode:
             secrets?.authMode || 'local_admin',
           sessionMode:
-            memberCount > 1
+            databaseSession.session_mode === 'team'
               ? 'team'
               : 'individual',
           teamSizeHint: memberCount,
@@ -1211,16 +1244,26 @@ app.get(
         ok: true,
         session,
         draftSession: null,
+        selectionRequired:
+          !databaseSession && accessibleSessions.length > 1,
+        selectedSessionId:
+          databaseSession?.id || null,
+        canCreateSession:
+          ownedActiveSessions.length === 0,
+        ownedActiveSessionIds:
+          ownedActiveSessions.map((item) => item.id),
         sessions: accessibleSessions.map((item) => ({
           id: item.id,
           name: item.name,
           status: item.status,
           expiresAt: item.expires_at,
           sessionMode:
-            Number(item.member_count || 1) > 1
+            item.session_mode === 'team'
               ? 'team'
               : 'individual',
           memberCount: Number(item.member_count || 1),
+          isOwner:
+            item.created_by_user_id === req.auth.userId,
         })),
         operation: visibleOperation
           ? {
@@ -2718,6 +2761,37 @@ return operationContext.run(
   deployOperation,
   async () => {
     try {
+      /*
+       * Un compte ne peut posseder qu'une seule session non detruite.
+       * Les sessions partagees creees par d'autres utilisateurs restent
+       * accessibles et ne bloquent pas la creation d'une session personnelle.
+       *
+       * Ce controle est fait cote serveur : il reste donc actif meme si
+       * l'interface est contournee ou si deux onglets sont ouverts.
+       */
+      const existingSessions =
+        await sessionRepository.listSessionsForUser(
+          req.auth.userId,
+          req.auth.tenantId,
+          false
+        );
+
+      const ownedActiveSession =
+        existingSessions.find(
+          (item) =>
+            item.created_by_user_id === req.auth.userId
+        ) || null;
+
+      if (ownedActiveSession) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ACTIVE_SESSION_EXISTS',
+          sessionId: ownedActiveSession.id,
+          error:
+            'Une session est deja active pour votre compte. Detruisez-la avant d en creer une nouvelle.'
+        });
+      }
+
       let groupMembers = [];
       let selectedGroup = null;
 
@@ -2908,21 +2982,44 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     deployOperation.cancelReadiness = false;
     deployOperation.logs = [];
 
-    databaseSession =
-    await sessionRepository.createSession({
-    tenantId: req.auth.tenantId,
-    createdByUserId: req.auth.userId,
-    name: finalWorkspaceName,
-    slug: finalWorkspaceSlug,
-    status: 'provisioning',
-    terraformDirectory: null,
-    expiresAt: sessionExpiresAt,
-    sessionMode,
-    groupId:
-      sessionMode === 'team'
-        ? groupId.trim()
-        : null,
-  });
+    try {
+      databaseSession =
+        await sessionRepository.createSession({
+          tenantId: req.auth.tenantId,
+          createdByUserId: req.auth.userId,
+          name: finalWorkspaceName,
+          slug: finalWorkspaceSlug,
+          status: 'provisioning',
+          terraformDirectory: null,
+          expiresAt: sessionExpiresAt,
+          sessionMode,
+          groupId:
+            sessionMode === 'team'
+              ? groupId.trim()
+              : null,
+        });
+    } catch (createSessionError) {
+      /*
+       * Dernière barrière contre une double création : la migration 009
+       * impose aussi l'unicité directement dans PostgreSQL. Ce cas peut
+       * arriver si deux requêtes concurrentes atteignent deux processus
+       * Node différents avant que le contrôle applicatif ne voie la session.
+       */
+      if (
+        createSessionError?.code === '23505' &&
+        createSessionError?.constraint ===
+          'sessions_one_active_per_creator_unique'
+      ) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ACTIVE_SESSION_EXISTS',
+          error:
+            'Une session est deja active pour votre compte. Detruisez-la avant d en creer une nouvelle.'
+        });
+      }
+
+      throw createSessionError;
+    }
 
     await usageRepository.setBillingOwnerSnapshot(
       databaseSession.id,

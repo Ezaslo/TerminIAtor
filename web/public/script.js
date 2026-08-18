@@ -3,8 +3,48 @@ let isDestroying = false;
 let eventSource = null;
 let sessionRefreshInterval = null;
 let lastSubmittedSession = null;
-let currentSessionId = null;
+const CURRENT_SESSION_STORAGE_KEY =
+  'privalyse_current_session_id';
+
+function readStoredCurrentSessionId() {
+  try {
+    return window.sessionStorage.getItem(
+      CURRENT_SESSION_STORAGE_KEY
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCurrentSessionId(sessionId) {
+  const normalized =
+    typeof sessionId === 'string' && sessionId.trim() !== ''
+      ? sessionId.trim()
+      : null;
+
+  currentSessionId = normalized;
+
+  try {
+    if (normalized) {
+      window.sessionStorage.setItem(
+        CURRENT_SESSION_STORAGE_KEY,
+        normalized
+      );
+    } else {
+      window.sessionStorage.removeItem(
+        CURRENT_SESSION_STORAGE_KEY
+      );
+    }
+  } catch (_) {
+    // L'application continue même si sessionStorage est indisponible.
+  }
+}
+
+let currentSessionId =
+  readStoredCurrentSessionId();
 let lastKnownSession = null;
+let multipleSessionWarningShown = false;
+let creationBlockedByActiveSession = false;
 
 function authHeaders() {
   return {
@@ -479,6 +519,84 @@ function formatDateTime(value) {
   return date.toLocaleString('fr-FR');
 }
 
+function getSessionStatusLabel(status) {
+  if (status === 'ready') return 'Prête';
+  if (status === 'provisioning') return 'Préparation';
+  if (status === 'error') return 'Erreur';
+  return status || 'En cours';
+}
+
+function renderSessionSelector(sessions = []) {
+  const summary = document.getElementById('sessionSummary');
+  const openSessionBtn = document.getElementById('openSessionBtn');
+  const destroyBtn = document.getElementById('destroyBtn');
+
+  if (!summary) return;
+
+  const safeSessions = Array.isArray(sessions)
+    ? sessions
+    : [];
+
+  summary.classList.remove('empty-state');
+  summary.classList.add('has-session');
+
+  const options = safeSessions
+    .map((item) => {
+      const ownerLabel = item.isOwner
+        ? 'créée par vous'
+        : 'partagée';
+      const shortId = String(item.id || '').slice(0, 8);
+
+      return (
+        `<option value="${escapeHtml(item.id)}">` +
+        `${escapeHtml(item.name || 'Espace')} — ` +
+        `${escapeHtml(getSessionStatusLabel(item.status))} — ` +
+        `${escapeHtml(ownerLabel)} — ${escapeHtml(shortId)}` +
+        `</option>`
+      );
+    })
+    .join('');
+
+  summary.innerHTML =
+    '<div class="session-status">' +
+      '<span class="status-pill warning"><i></i>Sélection requise</span>' +
+    '</div>' +
+    '<strong class="session-title">Plusieurs espaces sont actifs</strong>' +
+    '<span style="color:var(--text-secondary);margin-top:6px;">' +
+      'Sélectionnez explicitement l’espace à ouvrir ou à supprimer.' +
+    '</span>' +
+    '<select id="activeSessionSelector" ' +
+      'style="margin-top:14px;width:100%;height:42px;border-radius:8px;' +
+      'border:1px solid var(--border);background:var(--field-bg);' +
+      'color:var(--text-primary);padding:0 12px;">' +
+      '<option value="">Choisir un espace…</option>' +
+      options +
+    '</select>';
+
+  if (openSessionBtn) {
+    openSessionBtn.disabled = true;
+  }
+
+  if (destroyBtn) {
+    destroyBtn.disabled = true;
+  }
+
+  const selector =
+    document.getElementById('activeSessionSelector');
+
+  selector?.addEventListener('change', () => {
+    const selectedId = selector.value || null;
+
+    if (!selectedId) {
+      return;
+    }
+
+    setCurrentSessionId(selectedId);
+    multipleSessionWarningShown = false;
+    refreshSessionSummary();
+  });
+}
+
 function applyOperationState(operation = {}) {
   const deployBtn = document.getElementById('deployBtn');
   const openSessionBtn = document.getElementById('openSessionBtn');
@@ -490,11 +608,14 @@ function applyOperationState(operation = {}) {
   isDestroying = isRunning && operation.type === 'destroy';
 
   if (deployBtn) {
-    deployBtn.disabled = isRunning;
+    deployBtn.disabled =
+      isRunning || creationBlockedByActiveSession;
     deployBtn.classList.toggle('running', isDeploying);
     deployBtn.textContent = isDeploying
       ? 'Création en cours...'
-      : 'Créer l’espace sécurisé';
+      : creationBlockedByActiveSession
+        ? 'Une session est déjà active'
+        : 'Créer l’espace sécurisé';
   }
 
   if (openSessionBtn && isRunning) {
@@ -502,7 +623,8 @@ function applyOperationState(operation = {}) {
   }
 
   if (destroyBtn) {
-    destroyBtn.disabled = isRunning;
+    destroyBtn.disabled =
+      isRunning || !currentSessionId;
     destroyBtn.classList.toggle('running', isDestroying);
     destroyBtn.textContent = isDestroying
       ? 'Suppression en cours...'
@@ -602,14 +724,52 @@ function renderSessionSummary(
 
 async function refreshSessionSummary() {
   try {
-    const response = await fetch('/api/session');
+    const requestUrl = currentSessionId
+      ? `/api/session?sessionId=${encodeURIComponent(currentSessionId)}`
+      : '/api/session';
 
-    if (!response.ok) return;
+    const response = await fetch(requestUrl);
+
+    if (!response.ok) {
+      // Un identifiant mémorisé peut devenir invalide après destruction,
+      // expiration, changement de compte ou retrait d'un groupe.
+      if (
+        currentSessionId &&
+        (response.status === 400 || response.status === 403)
+      ) {
+        setCurrentSessionId(null);
+        return refreshSessionSummary();
+      }
+      return;
+    }
 
     const data = await response.json();
 
-    currentSessionId =
+    creationBlockedByActiveSession =
+      data.canCreateSession === false;
+
+    const selectedSessionId =
       data.session?.databaseSessionId || null;
+
+    if (selectedSessionId) {
+      setCurrentSessionId(selectedSessionId);
+      multipleSessionWarningShown = false;
+    } else if (data.selectionRequired) {
+      // Plusieurs sessions sont accessibles : aucune sélection implicite.
+      setCurrentSessionId(null);
+
+      if (!multipleSessionWarningShown) {
+        addLog(
+          'Plusieurs sessions sont accessibles. Sélectionnez explicitement l’espace à ouvrir ou à supprimer.',
+          'info'
+        );
+        multipleSessionWarningShown = true;
+      }
+    } else {
+      setCurrentSessionId(null);
+      multipleSessionWarningShown = false;
+    }
+
     lastKnownSession = data.session || data.draftSession || null;
 
     applyOperationState(data.operation || {});
@@ -617,11 +777,16 @@ async function refreshSessionSummary() {
       data.session || data.draftSession || null,
       data.operation || {}
     );
-    renderSessionSummary(
-      data.session || null,
-      data.draftSession || null,
-      data.operation || {}
-    );
+
+    if (data.selectionRequired) {
+      renderSessionSelector(data.sessions || []);
+    } else {
+      renderSessionSummary(
+        data.session || null,
+        data.draftSession || null,
+        data.operation || {}
+      );
+    }
   } catch (_) {
     // On conserve l’état actuel en cas d’erreur réseau temporaire.
   }
@@ -657,6 +822,13 @@ function setupDeployButton() {
 
   deployBtn.addEventListener('click', async () => {
     if (isDeploying) return;
+
+    if (creationBlockedByActiveSession) {
+      window.alert(
+        'Une session est déjà active pour votre compte. Supprimez-la avant d’en créer une nouvelle.'
+      );
+      return;
+    }
 
     const payload = collectDeployPayload();
     const validationError = validateDeployPayload(payload);
@@ -701,6 +873,14 @@ function setupDeployButton() {
           if (data?.error) {
             errorText = data.error;
           }
+
+          if (data?.code === 'ACTIVE_SESSION_EXISTS') {
+            creationBlockedByActiveSession = true;
+
+            if (data?.sessionId) {
+              setCurrentSessionId(data.sessionId);
+            }
+          }
         } catch (_) {
           // La réponse du serveur n’est pas au format JSON.
         }
@@ -714,8 +894,10 @@ function setupDeployButton() {
       const data = await response.json();
 
       if (data?.sessionId) {
-        currentSessionId = data.sessionId;
+        setCurrentSessionId(data.sessionId);
       }
+
+      creationBlockedByActiveSession = true;
 
       addLog(
         'La création de l’espace sécurisé a été lancée.',
@@ -732,9 +914,13 @@ function setupDeployButton() {
       window.alert('Impossible de contacter le serveur.');
     } finally {
       isDeploying = false;
-      deployBtn.disabled = false;
+      deployBtn.disabled =
+        creationBlockedByActiveSession;
       deployBtn.classList.remove('running');
-      deployBtn.textContent = 'Créer l’espace sécurisé';
+      deployBtn.textContent =
+        creationBlockedByActiveSession
+          ? 'Une session est déjà active'
+          : 'Créer l’espace sécurisé';
     }
   });
 }
@@ -903,7 +1089,7 @@ function setupDestroyButton() {
         }
 
         lastSubmittedSession = null;
-        currentSessionId = null;
+        setCurrentSessionId(null);
 
         addLog(
           'L’espace et ses données ont été supprimés.',
@@ -922,7 +1108,8 @@ function setupDestroyButton() {
       } finally {
         isDestroying = false;
 
-        destroyBtn.disabled = false;
+        destroyBtn.disabled =
+          !currentSessionId;
         destroyBtn.classList.remove(
           'running'
         );
