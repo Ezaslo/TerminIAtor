@@ -329,6 +329,46 @@ const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
   5 * 60 * 1000;
 const PROXY_COOKIE_NAME = 'privalyse_launch_token';
 
+// Les destructions Terraform sont sérialisées globalement.
+// Les déploiements peuvent rester parallèles, mais deux `terraform destroy`
+// ne sont jamais exécutés en même temps. C'est volontairement conservateur
+// pour supprimer tout risque de croisement pendant le durcissement multi-session.
+let destroyExecutionTail = Promise.resolve();
+let destroyExecutionQueueDepth = 0;
+
+async function withSerializedDestroy(
+  sessionId,
+  callback
+) {
+  const previousExecution = destroyExecutionTail;
+  let releaseExecution;
+
+  destroyExecutionTail = new Promise((resolve) => {
+    releaseExecution = resolve;
+  });
+
+  destroyExecutionQueueDepth += 1;
+
+  if (destroyExecutionQueueDepth > 1) {
+    pushLog(
+      `Destruction de la session ${sessionId} mise en file d attente de securite.`,
+      'info'
+    );
+  }
+
+  await previousExecution;
+
+  try {
+    return await callback();
+  } finally {
+    destroyExecutionQueueDepth = Math.max(
+      0,
+      destroyExecutionQueueDepth - 1
+    );
+    releaseExecution();
+  }
+}
+
 const AI_PULL_MAP = {
   'qwen-mini': 'qwen2.5:0.5b',
   'llama3-1b': 'llama3.2:1b'
@@ -440,6 +480,68 @@ async function requireSessionAccess(
 
     req.sessionId = sessionId;
     next();
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error:
+        'Impossible de verifier l acces a la session'
+    });
+  }
+}
+
+/**
+ * Variante fail-closed réservée aux actions destructives.
+ *
+ * Contrairement à requireSessionAccess, aucun fallback n'est autorisé :
+ * l'identifiant de session doit être fourni explicitement dans le body.
+ */
+async function requireExplicitDestroySessionAccess(
+  req,
+  res,
+  next
+) {
+  const sessionId =
+    typeof req.body?.sessionId === 'string'
+      ? req.body.sessionId.trim()
+      : '';
+
+  if (!sessionId) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'Identifiant de session obligatoire pour la destruction'
+    });
+  }
+
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      sessionId
+    )
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'Identifiant de session invalide pour la destruction'
+    });
+  }
+
+  try {
+    const allowed =
+      await sessionRepository.canUserAccessSession(
+        sessionId,
+        req.auth.userId,
+        req.auth.tenantId
+      );
+
+    if (!allowed) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Acces refuse a cette session'
+      });
+    }
+
+    req.sessionId = sessionId;
+    return next();
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -786,63 +888,74 @@ async function destroyInfraInternal(
   let destroySucceeded = false;
 
   try {
-    const databaseSession =
-      await sessionRepository.getSessionById(
-        sessionId
-      );
+    await withSerializedDestroy(
+      sessionId,
+      async () => {
+        // Relire la session une fois le verrou de destruction obtenu.
+        // Cela évite de valider une cible puis d'attendre pendant qu'un autre
+        // destroy modifie l'état global.
+        const databaseSession =
+          await sessionRepository.getSessionById(
+            sessionId
+          );
 
-    if (!databaseSession) {
-      throw new Error('Session introuvable.');
-    }
+        if (!databaseSession) {
+          throw new Error('Session introuvable.');
+        }
 
-    if (databaseSession.status === 'destroyed') {
-      throw new Error(
-        'Cette session est deja detruite.'
-      );
-    }
+        if (databaseSession.status === 'destroyed') {
+          throw new Error(
+            'Cette session est deja detruite.'
+          );
+        }
 
-    if (!databaseSession.terraform_directory) {
-      throw new Error(
-        'Dossier Terraform introuvable pour cette session.'
-      );
-    }
+        const destroyTarget =
+          validateDestroyTargetAgainstDatabase(
+            databaseSession
+          );
 
-    await runTerraform(
-      [
-        'destroy',
-        '-auto-approve'
-      ],
-      {
-       TF_VAR_allowed_cidr:
-       config.workspace.allowedCidr ||
-       '127.0.0.1/32',
+        await runTerraform(
+          [
+            'destroy',
+            '-auto-approve'
+          ],
+          {
+            TF_VAR_allowed_cidr:
+              config.workspace.allowedCidr ||
+              '127.0.0.1/32',
 
-       TF_VAR_webui_secret_key:
-       crypto.randomBytes(48).toString('hex')
-      },
-      databaseSession.terraform_directory
+            TF_VAR_webui_secret_key:
+              crypto.randomBytes(48).toString('hex')
+          },
+          destroyTarget.workingDirectory
+        );
+
+        const destroyedSession =
+          await sessionRepository.markSessionDestroyed(
+            sessionId
+          );
+
+        if (!destroyedSession) {
+          throw new Error(
+            'Infrastructure detruite mais mise a jour PostgreSQL impossible.'
+          );
+        }
+
+        destroySucceeded = true;
+      }
     );
-
-    await sessionRepository.markSessionDestroyed(
-      sessionId
-    );
-
-    destroySucceeded = true;
   } finally {
-    clearScheduledDestroy(sessionId);
-
     if (destroySucceeded) {
+      clearScheduledDestroy(sessionId);
       clearSessionSecrets(sessionId);
-    }
 
-    if (
-      sessionState.databaseSessionId === sessionId
-    ) {
-      clearSessionLikeState(sessionState);
-      clearSessionLikeState(draftSessionState);
-    }
+      if (
+        sessionState.databaseSessionId === sessionId
+      ) {
+        clearSessionLikeState(sessionState);
+        clearSessionLikeState(draftSessionState);
+      }
 
-    if (destroySucceeded) {
       persistState();
     }
 
@@ -1235,6 +1348,278 @@ function getSessionTerraformDirectory(sessionId) {
     sessionsRootDirectory,
     normalizedSessionId
   );
+}
+
+function getTerraformSessionsRootDirectory() {
+  return path.resolve(
+    __dirname,
+    'terraform-sessions'
+  );
+}
+
+function assertSafeTerraformStateLocation(
+  databaseSession,
+  explicitWorkingDirectory = null
+) {
+  if (!databaseSession?.id) {
+    throw new Error(
+      'Protection destruction: session PostgreSQL invalide.'
+    );
+  }
+
+  const sessionId = String(databaseSession.id).trim();
+
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      sessionId
+    )
+  ) {
+    throw new Error(
+      'Protection destruction: UUID de session invalide.'
+    );
+  }
+
+  if (!databaseSession.terraform_directory) {
+    throw new Error(
+      'Protection destruction: dossier Terraform absent en PostgreSQL.'
+    );
+  }
+
+  const sessionsRootDirectory =
+    getTerraformSessionsRootDirectory();
+
+  const expectedDirectory = path.resolve(
+    getSessionTerraformDirectory(sessionId)
+  );
+
+  const databaseDirectory = path.resolve(
+    String(databaseSession.terraform_directory)
+  );
+
+  if (databaseDirectory !== expectedDirectory) {
+    throw new Error(
+      `Protection destruction: dossier Terraform incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (
+    explicitWorkingDirectory &&
+    path.resolve(String(explicitWorkingDirectory)) !== expectedDirectory
+  ) {
+    throw new Error(
+      `Protection destruction: dossier Terraform d execution incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (path.dirname(expectedDirectory) !== sessionsRootDirectory) {
+    throw new Error(
+      `Protection destruction: le dossier de ${sessionId} sort de terraform-sessions.`
+    );
+  }
+
+  if (!fs.existsSync(sessionsRootDirectory)) {
+    throw new Error(
+      'Protection destruction: racine terraform-sessions introuvable.'
+    );
+  }
+
+  if (!fs.existsSync(expectedDirectory)) {
+    throw new Error(
+      `Protection destruction: dossier Terraform introuvable pour ${sessionId}.`
+    );
+  }
+
+  const directoryStats = fs.lstatSync(
+    expectedDirectory
+  );
+
+  if (
+    directoryStats.isSymbolicLink() ||
+    !directoryStats.isDirectory()
+  ) {
+    throw new Error(
+      `Protection destruction: dossier Terraform non fiable pour ${sessionId}.`
+    );
+  }
+
+  const realRootDirectory = fs.realpathSync(
+    sessionsRootDirectory
+  );
+
+  const realSessionDirectory = fs.realpathSync(
+    expectedDirectory
+  );
+
+  const expectedRealDirectory = path.join(
+    realRootDirectory,
+    sessionId
+  );
+
+  if (realSessionDirectory !== expectedRealDirectory) {
+    throw new Error(
+      `Protection destruction: chemin reel inattendu pour ${sessionId}.`
+    );
+  }
+
+  const statePath = path.join(
+    realSessionDirectory,
+    'terraform.tfstate'
+  );
+
+  if (!fs.existsSync(statePath)) {
+    throw new Error(
+      `Protection destruction: terraform.tfstate absent pour ${sessionId}.`
+    );
+  }
+
+  const stateStats = fs.lstatSync(statePath);
+
+  if (
+    stateStats.isSymbolicLink() ||
+    !stateStats.isFile() ||
+    stateStats.size <= 0
+  ) {
+    throw new Error(
+      `Protection destruction: terraform.tfstate invalide pour ${sessionId}.`
+    );
+  }
+
+  return {
+    sessionId,
+    workingDirectory: realSessionDirectory,
+    statePath,
+  };
+}
+
+function readTerraformInstanceIdForDestroy(
+  workingDirectory,
+  sessionId
+) {
+  const output = terraformOutputRaw(
+    'instance_id',
+    workingDirectory
+  );
+
+  const outputError = output?.error
+    ? String(output.error.message || output.error)
+    : '';
+
+  const stderr = String(output?.stderr || '').trim();
+
+  if (
+    outputError ||
+    output?.status !== 0
+  ) {
+    const detail = (outputError || stderr || 'output Terraform indisponible')
+      .replace(/\s+/g, ' ')
+      .slice(0, 240);
+
+    throw new Error(
+      `Protection destruction: impossible de lire instance_id dans le state de ${sessionId} (${detail}).`
+    );
+  }
+
+  const instanceId = String(
+    output.stdout || ''
+  ).trim();
+
+  if (!instanceId) {
+    throw new Error(
+      `Protection destruction: instance_id vide dans le state de ${sessionId}.`
+    );
+  }
+
+  return instanceId;
+}
+
+function validateDestroyTargetAgainstDatabase(
+  databaseSession,
+  explicitWorkingDirectory = null
+) {
+  const safeLocation =
+    assertSafeTerraformStateLocation(
+      databaseSession,
+      explicitWorkingDirectory
+    );
+
+  const databaseInstanceId = String(
+    databaseSession.instance_id || ''
+  ).trim();
+
+  if (!databaseInstanceId) {
+    throw new Error(
+      `Protection destruction: instance_id PostgreSQL absent pour ${safeLocation.sessionId}.`
+    );
+  }
+
+  const stateInstanceId =
+    readTerraformInstanceIdForDestroy(
+      safeLocation.workingDirectory,
+      safeLocation.sessionId
+    );
+
+  if (stateInstanceId !== databaseInstanceId) {
+    throw new Error(
+      `Protection destruction: instance_id incoherent pour ${safeLocation.sessionId}; destruction refusee.`
+    );
+  }
+
+  pushLog(
+    `Cible destruction validee: session=${safeLocation.sessionId}, ` +
+      `dossier=${safeLocation.workingDirectory}, ` +
+      `instance_db=${databaseInstanceId}, ` +
+      `instance_state=${stateInstanceId}.`,
+    'success'
+  );
+
+  return {
+    ...safeLocation,
+    databaseInstanceId,
+    stateInstanceId,
+  };
+}
+
+function validateFailedDeployCleanupTarget(
+  databaseSession,
+  explicitWorkingDirectory
+) {
+  const safeLocation =
+    assertSafeTerraformStateLocation(
+      databaseSession,
+      explicitWorkingDirectory
+    );
+
+  const stateInstanceId =
+    readTerraformInstanceIdForDestroy(
+      safeLocation.workingDirectory,
+      safeLocation.sessionId
+    );
+
+  const databaseInstanceId = String(
+    databaseSession.instance_id || ''
+  ).trim();
+
+  if (
+    databaseInstanceId &&
+    databaseInstanceId !== stateInstanceId
+  ) {
+    throw new Error(
+      `Protection nettoyage: instance_id incoherent pour ${safeLocation.sessionId}.`
+    );
+  }
+
+  pushLog(
+    `Cible nettoyage partiel validee: session=${safeLocation.sessionId}, ` +
+      `dossier=${safeLocation.workingDirectory}, ` +
+      `instance_state=${stateInstanceId}.`,
+    'success'
+  );
+
+  return {
+    ...safeLocation,
+    databaseInstanceId: databaseInstanceId || null,
+    stateInstanceId,
+  };
 }
 
 /**
@@ -2919,23 +3304,51 @@ persistState();
     );
 
     try {
-      await runTerraform(
-        [
-          'destroy',
-          '-auto-approve',
-        ],
-        {
-          TF_VAR_allowed_cidr:
-            config.workspace.allowedCidr ||
-            '127.0.0.1/32',
+      if (!databaseSession) {
+        throw new Error(
+          'Protection nettoyage: session PostgreSQL introuvable.'
+        );
+      }
 
-          TF_VAR_webui_secret_key:
-            crypto.randomBytes(48).toString('hex'),
+      await withSerializedDestroy(
+        databaseSession.id,
+        async () => {
+          const cleanupTarget =
+            validateFailedDeployCleanupTarget(
+              databaseSession,
+              sessionTerraformDirectory
+            );
 
-          TF_VAR_owui_password:
-            crypto.randomBytes(24).toString('base64url'),
-        },
-        sessionTerraformDirectory
+          await runTerraform(
+            [
+              'destroy',
+              '-auto-approve',
+            ],
+            {
+              TF_VAR_allowed_cidr:
+                config.workspace.allowedCidr ||
+                '127.0.0.1/32',
+
+              TF_VAR_webui_secret_key:
+                crypto.randomBytes(48).toString('hex'),
+
+              TF_VAR_owui_password:
+                crypto.randomBytes(24).toString('base64url'),
+            },
+            cleanupTarget.workingDirectory
+          );
+
+          const destroyedSession =
+            await sessionRepository.markSessionDestroyed(
+              databaseSession.id
+            );
+
+          if (!destroyedSession) {
+            throw new Error(
+              'Infrastructure partielle detruite mais mise a jour PostgreSQL impossible.'
+            );
+          }
+        }
       );
 
       pushLog(
@@ -2943,30 +3356,22 @@ persistState();
         'success'
       );
 
-      if (databaseSession) {
-        await sessionRepository.markSessionDestroyed(
+      clearSessionSecrets(databaseSession.id);
+
+      if (
+        sessionState.databaseSessionId ===
           databaseSession.id
+      ) {
+        clearSessionLikeState(
+          sessionState
+        );
+
+        clearSessionLikeState(
+          draftSessionState
         );
       }
 
-      if (databaseSession) {
-        clearSessionSecrets(databaseSession.id);
-
-        if (
-          sessionState.databaseSessionId ===
-            databaseSession.id
-        ) {
-          clearSessionLikeState(
-            sessionState
-          );
-
-          clearSessionLikeState(
-            draftSessionState
-          );
-        }
-
-        persistState();
-      }
+      persistState();
     } catch (cleanupError) {
       pushLog(
         `Echec du nettoyage automatique: ${cleanupError.message}`,
@@ -3042,7 +3447,7 @@ app.post(
 
   authMiddleware.authenticate,
   authMiddleware.requireAuthentication,
-  requireSessionAccess,
+  requireExplicitDestroySessionAccess,
 
   async (req, res) => {
     const sessionId = req.sessionId;
