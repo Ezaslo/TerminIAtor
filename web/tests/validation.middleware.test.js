@@ -1,4 +1,4 @@
-const test = require('node:test');
+﻿const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const validation = require('../src/middleware/validation.middleware');
@@ -66,7 +66,7 @@ test('validateInvitationToken rejects oversized lookup tokens', () => {
 });
 
 test('validateDeployment rejects oversized team groups', () => {
-  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'a'.repeat(129) } };
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 1, groupId: 'a'.repeat(129) } };
   const res = createResponse();
   const next = createNext();
   validation.validateDeployment(req, res, next);
@@ -75,10 +75,11 @@ test('validateDeployment rejects oversized team groups', () => {
 });
 
 test('validateDeployment accepts a valid team group', () => {
-  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'group-123' } };
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 1, groupId: 'group-123' } };
   const res = createResponse();
   const next = createNext();
   validation.validateDeployment(req, res, next);
   assert.equal(next.called, true);
   assert.equal(req.body.groupId, 'group-123');
 });
+

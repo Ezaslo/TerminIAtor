@@ -2920,10 +2920,16 @@ if (!INSTANCE_TYPES.has(instanceType)) {
   }
 
   const finalSessionTtlHours = Number.parseInt(String(sessionTtlHours), 10);
-  if (!Number.isInteger(finalSessionTtlHours) || finalSessionTtlHours < 1 || finalSessionTtlHours > 168) {
-    return res.status(400).json({ ok: false, error: 'sessionTtlHours invalide' });
-  }
 
+if (
+  !Number.isInteger(finalSessionTtlHours) ||
+  ![1, 2, 3].includes(finalSessionTtlHours)
+) {
+  return res.status(400).json({
+    ok: false,
+    error: 'sessionTtlHours doit être égal à 1, 2 ou 3.'
+  });
+}
   const finalTeamSizeHint = Number.parseInt(String(teamSizeHint), 10);
   if (!Number.isInteger(finalTeamSizeHint) || finalTeamSizeHint < 1 || finalTeamSizeHint > 200) {
     return res.status(400).json({ ok: false, error: 'teamSizeHint invalide' });
