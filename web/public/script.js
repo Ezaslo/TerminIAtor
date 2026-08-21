@@ -69,7 +69,7 @@ function getSelectedMode() {
 
 function getDurationLabel() {
   const durationSelect = document.getElementById('sessionTtlHours');
-  return durationSelect?.selectedOptions[0]?.textContent.trim() || '6 heures';
+  return durationSelect?.selectedOptions[0]?.textContent.trim() || '1 heure';
 }
 
 function updateWorkspaceNameCount() {
@@ -460,12 +460,11 @@ function validateDeployPayload(payload) {
   }
 
   if (
-    !Number.isInteger(payload.sessionTtlHours) ||
-    payload.sessionTtlHours < 1 ||
-    payload.sessionTtlHours > 168
-  ) {
-    return 'La durée sélectionnée est invalide.';
-  }
+  !Number.isInteger(payload.sessionTtlHours) ||
+  ![1, 2, 3].includes(payload.sessionTtlHours)
+) {
+  return 'La durée doit être de 1, 2 ou 3 heures.';
+}
 
   if (
     !['individual', 'team'].includes(payload.sessionMode)
