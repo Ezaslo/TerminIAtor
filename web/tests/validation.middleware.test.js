@@ -2,6 +2,8 @@
 const assert = require('node:assert/strict');
 
 const validation = require('../src/middleware/validation.middleware');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function createResponse() {
   return {
@@ -83,3 +85,15 @@ test('validateDeployment accepts a valid team group', () => {
   assert.equal(req.body.groupId, 'group-123');
 });
 
+test('markReady starts the user TTL at first ready and marks the session ready', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../src/repositories/usage.repository.js'),
+    'utf8'
+  );
+
+  assert.match(source, /status\s*=\s*'ready'/);
+  assert.match(source, /ready_at\s*=\s*COALESCE\(ready_at,\s*NOW\(\)\)/);
+  assert.match(source, /WHEN\s+ready_at\s+IS\s+NULL[\s\S]*session_ttl_hours\s+IS\s+NOT\s+NULL/);
+  assert.match(source, /NOW\(\)\s*\+\s*\(session_ttl_hours\s*\*\s*INTERVAL\s*'1 hour'\)/);
+  assert.match(source, /ELSE\s+expires_at/);
+});

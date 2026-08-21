@@ -943,27 +943,52 @@ async function destroyInfraInternal(
         destroySucceeded = true;
       }
     );
-  } finally {
-    if (destroySucceeded) {
-      clearScheduledDestroy(sessionId);
-      clearSessionSecrets(sessionId);
+ } finally {
+  if (destroySucceeded) {
+    clearScheduledDestroy(sessionId);
+    clearSessionSecrets(sessionId);
 
-      if (
-        sessionState.databaseSessionId === sessionId
-      ) {
-        clearSessionLikeState(sessionState);
-        clearSessionLikeState(draftSessionState);
-      }
+    try {
+  const removed =
+    removeSessionTerraformDirectory(sessionId);
 
-      persistState();
+  if (removed) {
+    pushLog(
+      `Dossier Terraform local supprime pour ${sessionId}.`,
+      'success',
+      operation
+    );
+  }
+
+  await sessionRepository.clearDestroyedSessionInfrastructureMetadata(
+    sessionId
+  );
+} catch (cleanupError) {
+  pushLog(
+    `Infrastructure detruite mais nettoyage local incomplet: ${cleanupError.message}`,
+    'error',
+    operation
+  );
+}
+
+    if (
+      sessionState.databaseSessionId === sessionId
+    ) {
+      clearSessionLikeState(sessionState);
+      clearSessionLikeState(draftSessionState);
     }
 
-    operation.status =
-      destroySucceeded ? 'success' : 'error';
-    operation.phase = 'idle';
-    operation.type =
-      destroySucceeded ? 'idle' : operation.type;
+    persistState();
   }
+
+  operation.status =
+    destroySucceeded ? 'success' : 'error';
+
+  operation.phase = 'idle';
+
+  operation.type =
+    destroySucceeded ? 'idle' : operation.type;
+}
 }
 
 function scheduleDestroyFromTtl(
@@ -1125,6 +1150,31 @@ async function cleanupExpiredSessions() {
           );
         }
       }
+    );
+  }
+}
+async function restoreScheduledDestroysFromDatabase() {
+  const sessions =
+    await sessionRepository.listFutureExpiringSessions(1000);
+
+  for (const session of sessions) {
+    scheduleDestroyFromTtl(
+      session.id,
+      session.expires_at
+    );
+
+    pushLog(
+      `Timer TTL restaure pour ${session.id}, expiration ${new Date(
+        session.expires_at
+      ).toISOString()}.`,
+      'info'
+    );
+  }
+
+  if (sessions.length > 0) {
+    pushLog(
+      `${sessions.length} timer(s) TTL restaure(s) depuis PostgreSQL.`,
+      'success'
     );
   }
 }
@@ -1446,7 +1496,73 @@ function getTerraformSessionsRootDirectory() {
     'terraform-sessions'
   );
 }
+function removeSessionTerraformDirectory(
+  sessionId,
+  explicitWorkingDirectory = null
+) {
+  const sessionsRootDirectory =
+    getTerraformSessionsRootDirectory();
 
+  const expectedDirectory = path.resolve(
+    getSessionTerraformDirectory(sessionId)
+  );
+
+  if (
+    explicitWorkingDirectory &&
+    path.resolve(String(explicitWorkingDirectory)) !== expectedDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: dossier incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (
+    path.dirname(expectedDirectory) !== sessionsRootDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: chemin hors de terraform-sessions pour ${sessionId}.`
+    );
+  }
+
+  if (!fs.existsSync(expectedDirectory)) {
+    return false;
+  }
+
+  const stats = fs.lstatSync(expectedDirectory);
+
+  if (
+    stats.isSymbolicLink() ||
+    !stats.isDirectory()
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: dossier non fiable pour ${sessionId}.`
+    );
+  }
+
+  const realRootDirectory =
+    fs.realpathSync(sessionsRootDirectory);
+
+  const realSessionDirectory =
+    fs.realpathSync(expectedDirectory);
+
+  const expectedRealDirectory =
+    path.join(realRootDirectory, String(sessionId));
+
+  if (
+    realSessionDirectory !== expectedRealDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: chemin reel inattendu pour ${sessionId}.`
+    );
+  }
+
+  fs.rmSync(realSessionDirectory, {
+    recursive: true,
+    force: false,
+  });
+
+  return true;
+}
 function assertSafeTerraformStateLocation(
   databaseSession,
   explicitWorkingDirectory = null
@@ -4210,12 +4326,20 @@ const expiredSessionCleanupTimer = setInterval(
 
 expiredSessionCleanupTimer.unref();
 
-cleanupExpiredSessions().catch((error) => {
-  pushLog(
-    `Erreur du nettoyage initial : ${error.message}`,
-    'error'
-  );
-});
+(async () => {
+  try {
+    // 1. Les sessions déjà expirées sont détruites immédiatement.
+    await cleanupExpiredSessions();
+
+    // 2. Les sessions encore valides récupèrent leur timer exact.
+    await restoreScheduledDestroysFromDatabase();
+  } catch (error) {
+    pushLog(
+      `Erreur de restauration des TTL au démarrage : ${error.message}`,
+      'error'
+    );
+  }
+})();
 
 
 
