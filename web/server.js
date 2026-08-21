@@ -982,8 +982,9 @@ function scheduleDestroyFromTtl(
     return;
   }
 
-  // Le timer est calculé depuis la vraie date expires_at PostgreSQL,
-  // et non depuis le moment où le workspace devient ready.
+  // Le timer est calculé depuis la vraie date expires_at PostgreSQL.
+  // Pour les nouvelles sessions, expires_at est recalculé au premier ready
+  // afin que l'utilisateur bénéficie réellement de 1h / 2h / 3h d'usage.
   const remainingMs = Math.max(
     0,
     expiresMs - Date.now()
@@ -1138,6 +1139,7 @@ app.get(
   '/api/stream',
   authMiddleware.authenticate,
   authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
   (req, res) => {
     if (
       ADMIN_TOKEN_ENABLED &&
@@ -1152,7 +1154,8 @@ app.get(
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-
+    res.flushHeaders?.();
+    res.write(': connected\n\n');
     getReplayLogsForUser(
       req.auth.userId
     ).forEach((log) => {
@@ -1254,7 +1257,12 @@ app.get(
               : 'individual',
           teamSizeHint: memberCount,
           createdAt: databaseSession.created_at,
-          expiresAt: databaseSession.expires_at,
+          readyAt: databaseSession.ready_at,
+          sessionTtlHours: databaseSession.session_ttl_hours,
+          expiresAt:
+            databaseSession.status === 'ready'
+              ? databaseSession.expires_at
+              : null,
           autoOpenAvailable:
             databaseSession.status === 'ready' &&
             Boolean(
@@ -1291,7 +1299,11 @@ app.get(
           id: item.id,
           name: item.name,
           status: item.status,
-          expiresAt: item.expires_at,
+          expiresAt:
+            item.status === 'ready'
+              ? item.expires_at
+              : null,
+          sessionTtlHours: item.session_ttl_hours,
           sessionMode:
             item.session_mode === 'team'
               ? 'team'
@@ -3005,7 +3017,10 @@ if (
     finalOwuiEmail
   );
 
-  const sessionExpiresAt = new Date(
+  // Garde-fou pendant le provisioning : si le backend redémarre ou si la
+  // préparation reste bloquée, la boucle de nettoyage conserve une échéance.
+  // Cette date sera remplacée au premier passage à ready par ready_at + TTL.
+  const provisioningSafetyExpiresAt = new Date(
     Date.now() +
       finalSessionTtlHours *
         60 *
@@ -3032,7 +3047,8 @@ if (
           slug: finalWorkspaceSlug,
           status: 'provisioning',
           terraformDirectory: null,
-          expiresAt: sessionExpiresAt,
+          expiresAt: provisioningSafetyExpiresAt,
+          sessionTtlHours: finalSessionTtlHours,
           sessionMode,
           groupId:
             sessionMode === 'team'
@@ -3202,9 +3218,10 @@ pushLog(
         ? groupId.trim()
         : null;
     draftSessionState.createdAt = new Date().toISOString();
-    draftSessionState.expiresAt = new Date(
-      Date.now() + finalSessionTtlHours * 60 * 60 * 1000
-    ).toISOString();
+    // Le TTL utilisateur ne démarre qu'au premier passage à ready.
+    // La DB conserve un expires_at de sécurité pendant le provisioning,
+    // mais il n'est pas présenté comme temps d'utilisation.
+    draftSessionState.expiresAt = null;
     persistState();
 
     pushLog(
@@ -3317,7 +3334,7 @@ sessionState.groupId =
     ? groupId.trim()
     : null;
       sessionState.createdAt = new Date().toISOString();
-      sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
+      sessionState.expiresAt = null;
       const sessionSecrets =
         getSessionSecretsForId(
           databaseSession.id,
@@ -3381,34 +3398,43 @@ if (finalAuthMode === 'trusted_header') {
   );
 }
 
-sessionState.status = 'ready';
-draftSessionState.status = 'ready';
-
-persistState();
-
 } else {
   throw new Error(
     'Impossible de recuperer instance_public_ip'
   );
 }
+    if (databaseSession) {
+      databaseSession = await usageRepository.markReady(
+        databaseSession.id
+      );
+
+      if (!databaseSession || !databaseSession.expires_at) {
+        throw new Error(
+          'Session prête mais expiration TTL impossible à calculer.'
+        );
+      }
+
+      sessionState.status = 'ready';
+      draftSessionState.status = 'ready';
+      sessionState.expiresAt = databaseSession.expires_at;
+      draftSessionState.expiresAt = databaseSession.expires_at;
+      persistState();
+
+      pushLog(
+        `TTL utilisateur démarré à ready : ${finalSessionTtlHours}h, expiration ${new Date(databaseSession.expires_at).toISOString()}.`,
+        'success'
+      );
+
+      scheduleDestroyFromTtl(
+        databaseSession.id,
+        databaseSession.expires_at
+      );
+    }
+
     deployOperation.status = 'success';
     deployOperation.phase = 'idle';
     deployOperation.cancelReadiness = false;
-       if (databaseSession) {
-      await sessionRepository.updateSessionStatus(
-        databaseSession.id,
-        'ready'
-      );
-
-      await usageRepository.markReady(
-        databaseSession.id
-      );
-    }
     deployOperation.type = 'idle';
-    scheduleDestroyFromTtl(
-    databaseSession.id,
-    databaseSession.expires_at || sessionExpiresAt
-);
 
     return res.json({
       ok: true,

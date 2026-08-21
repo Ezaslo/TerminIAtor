@@ -54,7 +54,14 @@ async function markReady(sessionId) {
     `
       UPDATE sessions
       SET
+        status = 'ready',
         ready_at = COALESCE(ready_at, NOW()),
+        expires_at = CASE
+          WHEN ready_at IS NULL
+            AND session_ttl_hours IS NOT NULL
+          THEN NOW() + (session_ttl_hours * INTERVAL '1 hour')
+          ELSE expires_at
+        END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *

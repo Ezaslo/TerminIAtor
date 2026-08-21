@@ -230,6 +230,7 @@ async function createSession(session) {
         status,
         terraform_directory,
         expires_at,
+        session_ttl_hours,
         session_mode,
         group_id
       )
@@ -243,7 +244,8 @@ async function createSession(session) {
         $7,
         $8,
         $9,
-        $10
+        $10,
+        $11
       )
       RETURNING *
     `,
@@ -256,6 +258,7 @@ async function createSession(session) {
       session.status || 'queued',
       session.terraformDirectory || null,
       session.expiresAt || null,
+      session.sessionTtlHours || null,
       session.sessionMode || 'individual',
       session.groupId || null,
     ]
@@ -287,6 +290,7 @@ async function listSessionsByTenantId(tenantId) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,
@@ -342,6 +346,7 @@ async function listSessionsForUser(
         sessions.created_at,
         sessions.updated_at,
         sessions.expires_at,
+        sessions.session_ttl_hours,
         sessions.destroyed_at,
         sessions.session_mode,
         sessions.group_id,
@@ -401,6 +406,7 @@ async function getSessionById(sessionId) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,
@@ -512,6 +518,7 @@ async function listExpiredSessions(limit = 10) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,

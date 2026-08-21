@@ -551,33 +551,74 @@
                     </section>
 
 
-                    <details
-                        id="logsSection"
-                        class="rail-card logs-card"
-                        style="display: none;"
+                    <section
+                        id="activeSessionCard"
+                        class="rail-card session-active-card"
+                        aria-live="polite"
                     >
-
-                        <summary>
-
-                            <span>
-                                <strong>
-                                    Journaux techniques
-                                </strong>
-                            </span>
-
-                            <span class="realtime-label">
+                        <div class="session-active-heading">
+                            <h2>Session active</h2>
+                            <span
+                                id="activeSessionStateBadge"
+                                class="session-active-badge neutral"
+                            >
                                 <i></i>
-                                Temps réel
+                                <span>Aucune session</span>
                             </span>
+                        </div>
 
-                        </summary>
+                        <div class="session-countdown-block">
+                            <strong
+                                id="sessionCountdown"
+                                class="session-countdown"
+                            >--:--:--</strong>
+                            <span id="sessionCountdownLabel">
+                                Aucune session active
+                            </span>
+                        </div>
 
-                        <div
-                            id="logs"
-                            class="logs-console"
-                        ></div>
+                        <p
+                            id="activeSessionMessage"
+                            class="session-active-message"
+                        >
+                            Créez un espace pour démarrer une session sécurisée.
+                        </p>
 
-                    </details>
+                        <div class="session-active-details">
+                            <div>
+                                <span>Créée à</span>
+                                <strong id="activeSessionCreatedAt">—</strong>
+                            </div>
+                            <div>
+                                <span>Prête à</span>
+                                <strong id="activeSessionReadyAt">—</strong>
+                            </div>
+                            <div>
+                                <span>Expiration</span>
+                                <strong id="activeSessionExpiresAt">—</strong>
+                            </div>
+                            <div>
+                                <span>Mode</span>
+                                <strong id="activeSessionMode">—</strong>
+                            </div>
+                            <div>
+                                <span>Durée</span>
+                                <strong id="activeSessionDuration">—</strong>
+                            </div>
+                            <div>
+                                <span>Accès</span>
+                                <strong id="activeSessionAccess">—</strong>
+                            </div>
+                        </div>
+
+                        <div class="session-auto-delete-note">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3.5 19 6v5.3c0 4.3-2.7 7.9-7 9.2-4.3-1.3-7-4.9-7-9.2V6l7-2.5Z"/>
+                                <path d="M12 8v4l2.5 2"/>
+                            </svg>
+                            <span>Destruction automatique à l’expiration</span>
+                        </div>
+                    </section>
 
                 </aside>
 

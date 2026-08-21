@@ -2,6 +2,9 @@
 let isDestroying = false;
 let eventSource = null;
 let sessionRefreshInterval = null;
+let sessionCountdownInterval = null;
+let activeSessionCardContext = null;
+let serverClockOffsetMs = 0;
 let lastSubmittedSession = null;
 const CURRENT_SESSION_STORAGE_KEY =
   'privalyse_current_session_id';
@@ -480,18 +483,7 @@ function validateDeployPayload(payload) {
 }
 
 function resetUiForNewOperation(operationType) {
-  const logsDiv = document.getElementById('logs');
-  const logsSection = document.getElementById('logsSection');
   const summary = document.getElementById('sessionSummary');
-
-  if (logsDiv) {
-    logsDiv.innerHTML = '';
-  }
-
-  if (logsSection) {
-    logsSection.style.display = 'block';
-    logsSection.open = true;
-  }
 
   if (!summary) return;
 
@@ -504,6 +496,175 @@ function resetUiForNewOperation(operationType) {
     updateLifecycleStepper(lastKnownSession, { type: 'destroy', status: 'running' });
     summary.textContent = 'Suppression de l’espace en cours...';
   }
+}
+
+function formatTime(value) {
+  if (!value) return '—';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  return date.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatSessionDuration(hours) {
+  const value = Number(hours);
+  if (![1, 2, 3].includes(value)) return '—';
+  return `${value} heure${value > 1 ? 's' : ''}`;
+}
+
+function formatCountdown(milliseconds) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [hours, minutes, seconds]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
+}
+
+function setActiveSessionBadge(kind, label) {
+  const badge = document.getElementById('activeSessionStateBadge');
+  if (!badge) return;
+
+  badge.className = `session-active-badge ${kind}`;
+  const labelElement = badge.querySelector('span');
+  if (labelElement) labelElement.textContent = label;
+}
+
+function updateActiveSessionCountdown() {
+  const countdown = document.getElementById('sessionCountdown');
+  const label = document.getElementById('sessionCountdownLabel');
+  const message = document.getElementById('activeSessionMessage');
+  const card = document.getElementById('activeSessionCard');
+
+  if (!countdown || !label || !message || !card) return;
+
+  const context = activeSessionCardContext;
+  card.classList.remove('is-expiring');
+
+  if (!context) {
+    countdown.textContent = '--:--:--';
+    label.textContent = 'Aucune session active';
+    message.textContent = 'Créez un espace pour démarrer une session sécurisée.';
+    setActiveSessionBadge('neutral', 'Aucune session');
+    return;
+  }
+
+  if (context.status === 'ready' && context.expiresAt) {
+    const expiresMs = new Date(context.expiresAt).getTime();
+    const nowMs = Date.now() + serverClockOffsetMs;
+    const remainingMs = Math.max(0, expiresMs - nowMs);
+
+    countdown.textContent = formatCountdown(remainingMs);
+    label.textContent = remainingMs <= 600000
+      ? 'avant destruction automatique'
+      : 'restantes';
+
+    if (remainingMs <= 0) {
+      message.textContent = 'Expiration atteinte. La destruction va démarrer.';
+      setActiveSessionBadge('warning', 'Expiration');
+      card.classList.add('is-expiring');
+    } else if (remainingMs <= 600000) {
+      message.textContent = 'Destruction prochaine : pensez à terminer votre travail.';
+      setActiveSessionBadge('warning', 'Expiration proche');
+      card.classList.add('is-expiring');
+    } else {
+      message.textContent = 'Espace opérationnel. Votre temps disponible est en cours.';
+      setActiveSessionBadge('success', 'Opérationnel');
+    }
+    return;
+  }
+
+  countdown.textContent = '--:--:--';
+
+  if (context.status === 'provisioning') {
+    label.textContent = 'le chrono démarre quand l’espace est prêt';
+    message.textContent = `Préparation en cours : votre durée de ${context.durationLabel || 'session'} ne diminue pas encore.`;
+    setActiveSessionBadge('warning', 'Préparation');
+  } else if (context.status === 'destroying') {
+    label.textContent = 'suppression sécurisée en cours';
+    message.textContent = 'Les ressources temporaires de la session sont en cours de destruction.';
+    setActiveSessionBadge('warning', 'Destruction');
+  } else if (context.status === 'error' || context.status === 'failed') {
+    label.textContent = 'session indisponible';
+    message.textContent = 'La session a rencontré une erreur. Le décompte utilisateur n’est pas présenté comme actif.';
+    setActiveSessionBadge('danger', 'Échec');
+  } else {
+    label.textContent = 'état de la session';
+    message.textContent = 'La session est en cours de traitement.';
+    setActiveSessionBadge('neutral', 'En attente');
+  }
+}
+
+function renderActiveSessionCard(
+  session,
+  draftSession = null,
+  operation = {}
+) {
+  const displayedSession = session || draftSession || lastSubmittedSession;
+  const isRunning = operation.status === 'running';
+
+  let status = displayedSession?.status || null;
+  if (isRunning && operation.type === 'destroy') {
+    status = 'destroying';
+  } else if (isRunning && operation.type === 'deploy') {
+    status = 'provisioning';
+  }
+
+  if (session?.now) {
+    const serverNowMs = new Date(session.now).getTime();
+    if (!Number.isNaN(serverNowMs)) {
+      serverClockOffsetMs = serverNowMs - Date.now();
+    }
+  }
+
+  const createdAt = document.getElementById('activeSessionCreatedAt');
+  const readyAt = document.getElementById('activeSessionReadyAt');
+  const expiresAt = document.getElementById('activeSessionExpiresAt');
+  const mode = document.getElementById('activeSessionMode');
+  const duration = document.getElementById('activeSessionDuration');
+  const access = document.getElementById('activeSessionAccess');
+
+  if (!displayedSession && !isRunning) {
+    activeSessionCardContext = null;
+    if (createdAt) createdAt.textContent = '—';
+    if (readyAt) readyAt.textContent = '—';
+    if (expiresAt) expiresAt.textContent = '—';
+    if (mode) mode.textContent = '—';
+    if (duration) duration.textContent = '—';
+    if (access) access.textContent = '—';
+    updateActiveSessionCountdown();
+    return;
+  }
+
+  const sessionMode = displayedSession?.sessionMode || displayedSession?.mode || 'individual';
+  const memberCount = Number(displayedSession?.teamSizeHint || displayedSession?.memberCount || 0);
+
+  if (createdAt) createdAt.textContent = formatTime(displayedSession?.createdAt);
+  if (readyAt) readyAt.textContent = formatTime(displayedSession?.readyAt);
+  if (expiresAt) expiresAt.textContent = formatTime(displayedSession?.expiresAt);
+  if (mode) mode.textContent = sessionMode === 'team' ? 'Équipe' : 'Individuel';
+  if (duration) duration.textContent = formatSessionDuration(displayedSession?.sessionTtlHours);
+  if (access) {
+    access.textContent = sessionMode === 'team'
+      ? memberCount > 1
+        ? `${memberCount} membres autorisés`
+        : 'Équipe autorisée'
+      : 'Vous uniquement';
+  }
+
+  activeSessionCardContext = {
+    status: status || 'unknown',
+    expiresAt: displayedSession?.expiresAt || null,
+    durationLabel: formatSessionDuration(displayedSession?.sessionTtlHours)
+  };
+
+  updateActiveSessionCountdown();
 }
 
 function formatDateTime(value) {
@@ -782,6 +943,11 @@ if (
     applyOperationState(data.operation || {});
     updateLifecycleStepper(
       data.session || data.draftSession || null,
+      data.operation || {}
+    );
+    renderActiveSessionCard(
+      data.session || null,
+      data.draftSession || null,
       data.operation || {}
     );
 
@@ -1197,10 +1363,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDestroyButton();
   updateLifecycleStepper(null, {});
 
-  connectLogStream();
+  renderActiveSessionCard(null, null, {});
   refreshSessionSummary();
   sessionRefreshInterval =
     window.setInterval(refreshSessionSummary, 15000);
+  sessionCountdownInterval =
+    window.setInterval(updateActiveSessionCountdown, 1000);
 });
 
 
