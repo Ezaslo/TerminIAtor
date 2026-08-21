@@ -968,21 +968,40 @@ async function destroyInfraInternal(
 
 function scheduleDestroyFromTtl(
   sessionId,
-  hours
+  expiresAt
 ) {
   clearScheduledDestroy(sessionId);
 
-  const ttlMs = hours * 60 * 60 * 1000;
+  const expiresMs = new Date(expiresAt).getTime();
+
+  if (!Number.isFinite(expiresMs)) {
+    pushLog(
+      `TTL non programme pour ${sessionId}: date d'expiration invalide.`,
+      'error'
+    );
+    return;
+  }
+
+  // Le timer est calculé depuis la vraie date expires_at PostgreSQL,
+  // et non depuis le moment où le workspace devient ready.
+  const remainingMs = Math.max(
+    0,
+    expiresMs - Date.now()
+  );
 
   const runDestroy = async () => {
-    // On ne bloque plus les autres sessions. Seule une opération déjà active
-    // sur cette même session repousse sa destruction TTL.
+    // Une opération active sur CETTE session repousse seulement sa destruction.
     if (getRunningOperationForSession(sessionId)) {
       const retryTimer = setTimeout(
         runDestroy,
         60 * 1000
       );
-      ttlDestroyTimers.set(sessionId, retryTimer);
+
+      ttlDestroyTimers.set(
+        sessionId,
+        retryTimer
+      );
+
       return;
     }
 
@@ -993,13 +1012,16 @@ function scheduleDestroyFromTtl(
       tenantId: null,
     });
 
-    bindOperationToSession(operation, sessionId);
+    bindOperationToSession(
+      operation,
+      sessionId
+    );
 
     await operationContext.run(
       operation,
       async () => {
         pushLog(
-          `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
+          `Expiration atteinte. Lancement de la destruction automatique de la session ${sessionId}.`,
           'info'
         );
 
@@ -1012,14 +1034,27 @@ function scheduleDestroyFromTtl(
           operation.status = 'error';
           operation.phase = 'idle';
           operation.cancelReadiness = false;
+
+          pushLog(
+            `Echec de la destruction TTL de la session ${sessionId} : ${error.message}`,
+            'error'
+          );
+
           persistState();
         }
       }
     );
   };
 
-  const timer = setTimeout(runDestroy, ttlMs);
-  ttlDestroyTimers.set(sessionId, timer);
+  const timer = setTimeout(
+    runDestroy,
+    remainingMs
+  );
+
+  ttlDestroyTimers.set(
+    sessionId,
+    timer
+  );
 }
 /**
  * Détruit les infrastructures associées aux sessions
@@ -3365,9 +3400,9 @@ persistState();
     }
     deployOperation.type = 'idle';
     scheduleDestroyFromTtl(
-      databaseSession.id,
-      finalSessionTtlHours
-    );
+    databaseSession.id,
+    databaseSession.expires_at || sessionExpiresAt
+);
 
     return res.json({
       ok: true,

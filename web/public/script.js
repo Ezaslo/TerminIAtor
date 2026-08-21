@@ -744,7 +744,15 @@ async function refreshSessionSummary() {
     }
 
     const data = await response.json();
-
+if (
+  !data.session &&
+  !data.draftSession &&
+  !data.selectionRequired &&
+  data.operation?.status !== 'running'
+) {
+  lastSubmittedSession = null;
+  setCurrentSessionId(null);
+}
     creationBlockedByActiveSession =
       data.canCreateSession === false;
 
