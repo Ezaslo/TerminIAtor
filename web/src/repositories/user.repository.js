@@ -76,13 +76,14 @@ async function findUserByEmail(email) {
 
   const result = await database.query(
     `
-     SELECT
-     id,
-     tenant_id,
-     email,
-     role,
-     monthly_quota_hours,
-     created_at
+      SELECT
+        id,
+        tenant_id,
+        email,
+        password_hash,
+        role,
+        monthly_quota_hours,
+        created_at
       FROM users
       WHERE LOWER(email) = $1
     `,
@@ -114,26 +115,58 @@ async function findUserById(id) {
 }
 
 async function findUserCredentialsById(id) {
-  if (!id) return null;
+  if (!id) {
+    return null;
+  }
+
   const result = await database.query(
-    `SELECT id, tenant_id, email, password_hash, role, created_at
-     FROM users WHERE id = $1`,
+    `
+      SELECT
+        id,
+        tenant_id,
+        email,
+        password_hash,
+        role,
+        created_at
+      FROM users
+      WHERE id = $1
+    `,
     [id]
   );
+
   return result.rows[0] || null;
 }
 
-async function updatePasswordHashById({ userId, passwordHash }) {
+async function updatePasswordHashById({
+  userId,
+  passwordHash,
+}) {
   if (!userId || !passwordHash) {
-    throw new Error('L’utilisateur et le nouveau hash du mot de passe sont obligatoires.');
+    throw new Error(
+      'L’utilisateur et le nouveau hash du mot de passe sont obligatoires.'
+    );
   }
+
   const result = await database.query(
-    `UPDATE users SET password_hash = $2 WHERE id = $1
-     RETURNING id, tenant_id, email, role`,
-    [userId, passwordHash]
+    `
+      UPDATE users
+      SET password_hash = $2
+      WHERE id = $1
+      RETURNING
+        id,
+        tenant_id,
+        email,
+        role
+    `,
+    [
+      userId,
+      passwordHash,
+    ]
   );
+
   return result.rows[0] || null;
 }
+
 /**
  * Liste les utilisateurs d’une organisation.
  *
@@ -156,12 +189,10 @@ async function listUsersByTenantId(
         tenant_id,
         email,
         role,
+        monthly_quota_hours,
         created_at
-
       FROM users
-
       WHERE tenant_id = $1
-
       ORDER BY created_at ASC
     `,
     [tenantId]
@@ -169,6 +200,7 @@ async function listUsersByTenantId(
 
   return result.rows;
 }
+
 /**
  * Supprime un utilisateur appartenant à un tenant.
  *
@@ -184,10 +216,8 @@ async function deleteUserByIdAndTenantId({
   const result = await database.query(
     `
       DELETE FROM users
-
       WHERE id = $1
         AND tenant_id = $2
-
       RETURNING
         id,
         tenant_id,
@@ -202,6 +232,7 @@ async function deleteUserByIdAndTenantId({
 
   return result.rows[0] || null;
 }
+
 async function updateMonthlyQuotaByIdAndTenantId({
   userId,
   tenantId,
@@ -229,6 +260,7 @@ async function updateMonthlyQuotaByIdAndTenantId({
 
   return result.rows[0] || null;
 }
+
 module.exports = {
   createUser,
   findUserByEmail,
