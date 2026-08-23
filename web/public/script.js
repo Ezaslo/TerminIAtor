@@ -1400,5 +1400,221 @@ document.addEventListener('DOMContentLoaded', () => {
   sessionCountdownInterval =
     window.setInterval(updateActiveSessionCountdown, 1000);
 });
+// =========================================================
+// CONSOMMATION MENSUELLE
+// =========================================================
 
+const usageCardEl =
+  document.getElementById('monthlyUsageCard');
+
+const usageContextEl =
+  document.getElementById('monthlyUsageContext');
+
+const usageRemainingEl =
+  document.getElementById('monthlyUsageRemaining');
+
+const usageProgressEl =
+  document.getElementById('monthlyUsageProgressBar');
+
+const usageUsedEl =
+  document.getElementById('monthlyUsageUsed');
+
+const usageQuotaEl =
+  document.getElementById('monthlyUsageQuota');
+
+
+function formatMonthlyUsageHours(hours) {
+  const totalMinutes = Math.round(
+    Number(hours || 0) * 60
+  );
+
+  const wholeHours = Math.floor(
+    totalMinutes / 60
+  );
+
+  const minutes = totalMinutes % 60;
+
+  if (wholeHours === 0) {
+    return `${minutes} min`;
+  }
+
+  if (minutes === 0) {
+    return `${wholeHours} h`;
+  }
+
+  return `${wholeHours} h ${minutes} min`;
+}
+
+
+async function refreshMonthlyUsage() {
+  if (
+    !usageCardEl ||
+    !usageContextEl ||
+    !usageRemainingEl ||
+    !usageProgressEl ||
+    !usageUsedEl ||
+    !usageQuotaEl
+  ) {
+    return;
+  }
+
+  const selectedMode =
+    document.querySelector(
+      'input[name="sessionMode"]:checked'
+    )?.value || 'individual';
+
+  const groupSelect =
+    document.getElementById('groupId');
+
+  usageCardEl.classList.remove(
+    'warning',
+    'danger'
+  );
+
+  usageRemainingEl.textContent =
+    'Chargement…';
+
+  usageUsedEl.textContent = '—';
+  usageQuotaEl.textContent = '—';
+  usageProgressEl.style.width = '0%';
+
+  let url =
+    '/api/usage/quota?mode=individual';
+
+  if (selectedMode === 'team') {
+    const groupId =
+      groupSelect?.value || '';
+
+    if (!groupId) {
+      usageContextEl.textContent =
+        'Équipe';
+
+      usageRemainingEl.textContent =
+        'Sélectionnez un groupe';
+
+      return;
+    }
+
+    const selectedGroupName =
+      groupSelect.options[
+        groupSelect.selectedIndex
+      ]?.textContent?.trim() || 'Équipe';
+
+    usageContextEl.textContent =
+      selectedGroupName;
+
+    url =
+      `/api/usage/quota?mode=team&groupId=${encodeURIComponent(groupId)}`;
+  } else {
+    usageContextEl.textContent =
+      'Personnel';
+  }
+
+  try {
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(
+        data.error ||
+        'Impossible de charger la consommation.'
+      );
+    }
+
+    const quota = data.quota || {};
+
+    const usedHours =
+      Number(quota.usedHours || 0);
+
+    const monthlyQuotaHours =
+      quota.monthlyQuotaHours === null ||
+      quota.monthlyQuotaHours === undefined
+        ? null
+        : Number(quota.monthlyQuotaHours);
+
+    const remainingHours =
+      quota.remainingHours === null ||
+      quota.remainingHours === undefined
+        ? null
+        : Number(quota.remainingHours);
+
+    usageUsedEl.textContent =
+      `${formatMonthlyUsageHours(usedHours)} utilisées`;
+
+    if (monthlyQuotaHours === null) {
+      usageRemainingEl.textContent =
+        'Quota illimité';
+
+      usageQuotaEl.textContent =
+        'Quota : illimité';
+
+      usageProgressEl.style.width = '0%';
+
+      return;
+    }
+
+    usageQuotaEl.textContent =
+      `Quota : ${formatMonthlyUsageHours(monthlyQuotaHours)}`;
+
+    usageRemainingEl.textContent =
+      `${formatMonthlyUsageHours(remainingHours)} restantes`;
+
+    const percentage =
+      monthlyQuotaHours === 0
+        ? 100
+        : Math.min(
+            100,
+            (usedHours / monthlyQuotaHours) * 100
+          );
+
+    usageProgressEl.style.width =
+      `${percentage}%`;
+
+    if (percentage >= 100) {
+      usageCardEl.classList.add('danger');
+    } else if (percentage >= 80) {
+      usageCardEl.classList.add('warning');
+    }
+  } catch (error) {
+    console.error(
+      'Erreur consommation mensuelle :',
+      error
+    );
+
+    usageRemainingEl.textContent =
+      'Indisponible';
+
+    usageUsedEl.textContent =
+      'Impossible de charger la consommation';
+  }
+}
+
+
+// Chargement initial
+refreshMonthlyUsage();
+
+
+// Changement Individuel / Équipe
+document
+  .querySelectorAll(
+    'input[name="sessionMode"]'
+  )
+  .forEach((radio) => {
+    radio.addEventListener(
+      'change',
+      refreshMonthlyUsage
+    );
+  });
+
+
+// Changement de groupe
+document
+  .getElementById('groupId')
+  ?.addEventListener(
+    'change',
+    refreshMonthlyUsage
+  );
 

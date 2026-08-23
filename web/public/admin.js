@@ -340,7 +340,7 @@ function displayUsers(data) {
   if (tenantUsers.length === 0) {
     const row = document.createElement('tr');
     const cell = createCell('Aucun utilisateur.', 'empty-row');
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     row.appendChild(cell);
     usersTableBody.appendChild(row);
     return;
@@ -522,7 +522,93 @@ function createMemberForm(group, members) {
   form.append(field, submit);
   return form;
 }
+function createGroupQuotaControl(group) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'quota-control';
 
+  const label = document.createElement('label');
+  label.textContent = 'Quota mensuel';
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = '744';
+  input.step = '1';
+  input.placeholder = 'Illimité';
+
+  const currentQuota =
+    group.monthly_quota_hours ??
+    group.monthlyQuotaHours ??
+    null;
+
+  input.value =
+    currentQuota === null
+      ? ''
+      : String(currentQuota);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'primary-button small-button';
+  button.textContent = 'Enregistrer';
+
+  button.addEventListener('click', async () => {
+    const rawValue = input.value.trim();
+
+    const monthlyQuotaHours =
+      rawValue === ''
+        ? null
+        : Number(rawValue);
+
+    if (
+      monthlyQuotaHours !== null &&
+      (
+        !Number.isInteger(monthlyQuotaHours) ||
+        monthlyQuotaHours < 0 ||
+        monthlyQuotaHours > 744
+      )
+    ) {
+      displayPageMessage(
+        'Le quota doit être compris entre 0 et 744 heures.',
+        'error'
+      );
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = 'Enregistrement…';
+
+    try {
+      await requestJson(
+        `/api/admin/groups/${encodeURIComponent(group.id)}/quota`,
+        {
+          method: 'PATCH',
+          body: {
+            monthlyQuotaHours,
+          },
+        }
+      );
+
+      displayPageMessage(
+        monthlyQuotaHours === null
+          ? `Quota illimité enregistré pour ${group.name}.`
+          : `Quota de ${monthlyQuotaHours} h enregistré pour ${group.name}.`,
+        'success'
+      );
+
+      await refreshGroups();
+      await refreshUsage();
+    } catch (error) {
+      displayPageMessage(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Enregistrer';
+    }
+  });
+
+  wrapper.append(label, input, button);
+
+  return wrapper;
+}
 function displayGroups(data) {
   groupsContainer.replaceChildren();
   groupsCount.textContent = String(data.count ?? 0);
@@ -554,6 +640,9 @@ function displayGroups(data) {
     meta.textContent = `${members.length}/3 membre${members.length > 1 ? 's' : ''} · créé le ${formatDate(group.created_at || group.createdAt)}`;
 
     titleBlock.append(title, meta);
+    titleBlock.appendChild(
+  createGroupQuotaControl(group)
+);
     header.append(titleBlock, createDeleteGroupButton(group));
 
     const membersList = document.createElement('div');

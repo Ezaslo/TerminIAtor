@@ -3884,7 +3884,74 @@ app.get(
     }
   }
 );
+/**
+ * Retourne la consommation mensuelle et le quota
+ * pour l'utilisateur ou le groupe sélectionné.
+ */
+app.get(
+  '/api/usage/quota',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  async (req, res) => {
+    try {
+      const sessionMode =
+        req.query?.mode === 'team'
+          ? 'team'
+          : 'individual';
 
+      let groupId = null;
+
+      if (sessionMode === 'team') {
+        groupId = req.query?.groupId || null;
+
+        if (!groupId || !isUuid(groupId)) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Groupe invalide.',
+          });
+        }
+
+        const groups =
+          await groupRepository.listGroupsByUserId(
+            req.auth.tenantId,
+            req.auth.userId
+          );
+
+        const allowedGroup = groups.find(
+          (group) => group.id === groupId
+        );
+
+        if (!allowedGroup) {
+          return res.status(403).json({
+            ok: false,
+            error:
+              'Vous ne pouvez pas consulter le quota de ce groupe.',
+          });
+        }
+      }
+
+      const quota =
+        await usageRepository.getMonthlyQuotaStatus({
+          tenantId: req.auth.tenantId,
+          userId: req.auth.userId,
+          sessionMode,
+          groupId,
+          requestedHours: 0,
+        });
+
+      return res.json({
+        ok: true,
+        quota,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          `Impossible de charger la consommation : ${error.message}`,
+      });
+    }
+  }
+);
 /**
  * Liste tous les groupes du tenant pour l'administration.
  */
@@ -4101,7 +4168,88 @@ app.delete(
     }
   }
 );
+/**
+ * Modifie le quota mensuel d'un groupe.
+ * null = illimité.
+ */
+app.patch(
+  '/api/admin/groups/:groupId/quota',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const { groupId } = req.params;
 
+      if (!isUuid(groupId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de groupe invalide.',
+        });
+      }
+
+      const rawMonthlyQuotaHours =
+        req.body?.monthlyQuotaHours;
+
+      let monthlyQuotaHours = null;
+
+      if (
+        rawMonthlyQuotaHours !== null &&
+        rawMonthlyQuotaHours !== undefined &&
+        rawMonthlyQuotaHours !== ''
+      ) {
+        const parsedQuota =
+          Number(rawMonthlyQuotaHours);
+
+        if (
+          !Number.isInteger(parsedQuota) ||
+          parsedQuota < 0 ||
+          parsedQuota > 744
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              'Le quota mensuel doit être un entier entre 0 et 744 heures.',
+          });
+        }
+
+        monthlyQuotaHours = parsedQuota;
+      }
+
+      const group =
+        await groupRepository.updateMonthlyQuotaByIdAndTenantId({
+          groupId,
+          tenantId: req.auth.tenantId,
+          monthlyQuotaHours,
+        });
+
+      if (!group) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Groupe introuvable.',
+        });
+      }
+
+      return res.json({
+        ok: true,
+        group: {
+          id: group.id,
+          name: group.name,
+          monthlyQuotaHours:
+            group.monthly_quota_hours === null
+              ? null
+              : Number(group.monthly_quota_hours),
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          `Impossible de modifier le quota du groupe : ${error.message}`,
+      });
+    }
+  }
+);
 /**
  * Supprime un groupe et ses appartenances.
  */
