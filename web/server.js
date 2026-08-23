@@ -3058,6 +3058,29 @@ if (
     error: 'sessionTtlHours doit être égal à 1, 2 ou 3.'
   });
 }
+const quotaStatus =
+  await usageRepository.getMonthlyQuotaStatus({
+    tenantId: req.auth.tenantId,
+    userId: req.auth.userId,
+    sessionMode,
+    groupId:
+      sessionMode === 'team'
+        ? selectedGroup.id
+        : null,
+    requestedHours: finalSessionTtlHours,
+  });
+
+if (!quotaStatus.allowed) {
+  return res.status(403).json({
+    ok: false,
+    code: 'MONTHLY_QUOTA_EXCEEDED',
+    error:
+      `Quota mensuel insuffisant. ` +
+      `Il reste ${quotaStatus.remainingHours.toFixed(2)} h, ` +
+      `mais la session demande ${finalSessionTtlHours} h.`,
+    quota: quotaStatus,
+  });
+}
   const finalTeamSizeHint = Number.parseInt(String(teamSizeHint), 10);
   if (!Number.isInteger(finalTeamSizeHint) || finalTeamSizeHint < 1 || finalTeamSizeHint > 200) {
     return res.status(400).json({ ok: false, error: 'teamSizeHint invalide' });

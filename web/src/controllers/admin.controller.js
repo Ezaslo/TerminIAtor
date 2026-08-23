@@ -53,6 +53,10 @@ async function listUsers(
         id: user.id,
         email: user.email,
         role: user.role,
+        monthlyQuotaHours:
+  user.monthly_quota_hours === null
+    ? null
+    : Number(user.monthly_quota_hours),
         createdAt: user.created_at,
       })),
     });
@@ -352,11 +356,81 @@ async function resetUserPassword(
     return next(error);
   }
 }
+async function updateUserQuota(
+  request,
+  response,
+  next
+) {
+  try {
+    const userId =
+      typeof request.params?.userId === 'string'
+        ? request.params.userId.trim()
+        : '';
+
+    const rawQuota =
+      request.body?.monthlyQuotaHours;
+
+    let monthlyQuotaHours = null;
+
+    if (
+      rawQuota !== null &&
+      rawQuota !== undefined &&
+      rawQuota !== ''
+    ) {
+      monthlyQuotaHours =
+        Number.parseInt(String(rawQuota), 10);
+
+      if (
+        !Number.isInteger(monthlyQuotaHours) ||
+        monthlyQuotaHours < 0 ||
+        monthlyQuotaHours > 744
+      ) {
+        return response.status(400).json({
+          error:
+            'Le quota mensuel doit être compris entre 0 et 744 heures, ou être vide pour un quota illimité.',
+        });
+      }
+    }
+
+    const updatedUser =
+      await userRepository
+        .updateMonthlyQuotaByIdAndTenantId({
+          userId,
+          tenantId: request.auth.tenantId,
+          monthlyQuotaHours,
+        });
+
+    if (!updatedUser) {
+      return response.status(404).json({
+        error: 'Utilisateur introuvable.',
+      });
+    }
+
+    return response.status(200).json({
+      ok: true,
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        monthlyQuotaHours:
+          updatedUser.monthly_quota_hours === null
+            ? null
+            : Number(
+                updatedUser.monthly_quota_hours
+              ),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 /**
  * Renvoie la consommation machine du tenant sur une période.
  * Une session représente une seule machine facturable, même si plusieurs
  * membres d'un groupe y accèdent.
  */
+
 async function listUsage(
   request,
   response,
@@ -411,6 +485,9 @@ async function listUsage(
 
     const normalizedSessions = sessions.map((session) => {
       const billableSeconds = Number(session.billable_seconds || 0);
+      const usageSeconds = Number(
+      session.usage_seconds || 0
+);
       const fallbackGroupBilling =
         session.session_mode === 'team' &&
         Boolean(session.group_id);
@@ -430,6 +507,10 @@ async function listUsage(
         (payerType === 'group'
           ? session.group_name || 'Groupe supprimé'
           : session.creator_email || 'Utilisateur supprimé');
+      const monthlyQuotaHours =
+      payerType === 'group'
+      ? session.group_monthly_quota_hours
+      : session.creator_monthly_quota_hours;
 
       return {
         id: session.id,
@@ -458,6 +539,13 @@ async function listUsage(
           Array.isArray(session.participants)
             ? session.participants
             : [],
+            usageSeconds,
+
+monthlyQuotaHours:
+  monthlyQuotaHours === null ||
+  monthlyQuotaHours === undefined
+    ? null
+    : Number(monthlyQuotaHours),
       };
     });
 
@@ -477,6 +565,8 @@ async function listUsage(
 
       if (!payerMap.has(payerKey)) {
         payerMap.set(payerKey, {
+          usageSeconds: 0,
+          monthlyQuotaHours: session.monthlyQuotaHours,
           payerType: session.payerType,
           payerId: session.payerId || null,
           payerName: session.payerName,
@@ -487,11 +577,28 @@ async function listUsage(
 
       const payer = payerMap.get(payerKey);
       payer.billableSeconds += session.billableSeconds;
+      payer.usageSeconds += session.usageSeconds;
       payer.sessionCount += 1;
     }
 
     const payers = Array.from(payerMap.values())
-      .sort(
+  .map((payer) => {
+    const usedHours =
+      payer.usageSeconds / 3600;
+
+    return {
+      ...payer,
+      usedHours,
+      remainingHours:
+        payer.monthlyQuotaHours === null
+          ? null
+          : Math.max(
+              0,
+              payer.monthlyQuotaHours - usedHours
+            ),
+    };
+  })
+  .sort(
         (left, right) =>
           right.billableSeconds - left.billableSeconds
       );
@@ -518,6 +625,7 @@ module.exports = {
   listUsers,
   deleteUser,
   resetUserPassword,
+  updateUserQuota,
   listInvitations,
   createInvitation,
   listUsage,

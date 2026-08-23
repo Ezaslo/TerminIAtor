@@ -76,13 +76,13 @@ async function findUserByEmail(email) {
 
   const result = await database.query(
     `
-      SELECT
-        id,
-        tenant_id,
-        email,
-        password_hash,
-        role,
-        created_at
+     SELECT
+     id,
+     tenant_id,
+     email,
+     role,
+     monthly_quota_hours,
+     created_at
       FROM users
       WHERE LOWER(email) = $1
     `,
@@ -202,10 +202,38 @@ async function deleteUserByIdAndTenantId({
 
   return result.rows[0] || null;
 }
+async function updateMonthlyQuotaByIdAndTenantId({
+  userId,
+  tenantId,
+  monthlyQuotaHours,
+}) {
+  const result = await database.query(
+    `
+      UPDATE users
+      SET monthly_quota_hours = $3
+      WHERE id = $1
+        AND tenant_id = $2
+      RETURNING
+        id,
+        email,
+        role,
+        monthly_quota_hours,
+        created_at
+    `,
+    [
+      userId,
+      tenantId,
+      monthlyQuotaHours,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 module.exports = {
   createUser,
   findUserByEmail,
   findUserById,
+  updateMonthlyQuotaByIdAndTenantId,
   findUserCredentialsById,
   updatePasswordHashById,
   deleteUserByIdAndTenantId,

@@ -997,19 +997,20 @@ function setupDeployButton() {
     if (isDeploying) return;
 
     if (creationBlockedByActiveSession) {
-      window.alert(
-        'Une session est déjà active pour votre compte. Supprimez-la avant d’en créer une nouvelle.'
-      );
-      return;
-    }
+  showAppToast(
+    'Une session est déjà active pour votre compte. Supprimez-la avant d’en créer une nouvelle.',
+    'error'
+  );
+  return;
+}
 
     const payload = collectDeployPayload();
     const validationError = validateDeployPayload(payload);
 
     if (validationError) {
-      window.alert(validationError);
-      return;
-    }
+  showAppToast(validationError, 'error');
+  return;
+}
 
     resetUiForNewOperation('deploy');
 
@@ -1060,7 +1061,7 @@ function setupDeployButton() {
 
         errorText = humanizeErrorMessage(errorText);
         addLog(`Erreur de création : ${errorText}`, 'error');
-        window.alert(errorText);
+        showAppToast(errorText, 'error');
         return;
       }
 
@@ -1084,7 +1085,10 @@ function setupDeployButton() {
         'error'
       );
 
-      window.alert('Impossible de contacter le serveur.');
+      showAppToast(
+  'Impossible de contacter le serveur.',
+  'error'
+);
     } finally {
       isDeploying = false;
       deployBtn.disabled =
@@ -1348,14 +1352,40 @@ function setupOpenSessionButton() {
       addLog('L’espace sécurisé a été ouvert.', 'success');
     } catch (error) {
       addLog(`Erreur d’ouverture : ${error.message}`, 'error');
-      window.alert(error.message);
+     showAppToast(error.message, 'error');
     } finally {
       openSessionBtn.textContent = initialText;
       refreshSessionSummary();
     }
   });
 }
+function showAppToast(message, type = 'error') {
+  const existing = document.getElementById('app-toast');
+  existing?.remove();
 
+  const toast = document.createElement('div');
+  toast.id = 'app-toast';
+  toast.className = `app-toast app-toast--${type}`;
+
+  const text = document.createElement('span');
+  text.textContent = message;
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  close.setAttribute('aria-label', 'Fermer');
+
+  close.addEventListener('click', () => {
+    toast.remove();
+  });
+
+  toast.append(text, close);
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 7000);
+}
 document.addEventListener('DOMContentLoaded', () => {
   setupFormInteractions();
   setupDeployButton();

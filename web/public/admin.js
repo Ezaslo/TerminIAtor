@@ -251,7 +251,86 @@ function createDeleteUserButton(user) {
 
   return button;
 }
+function createUserQuotaCell(user) {
+  const cell = document.createElement('td');
 
+  const wrapper = document.createElement('div');
+  wrapper.className = 'actions-cell';
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = '744';
+  input.step = '1';
+  input.placeholder = 'Illimité';
+  input.style.width = '100px';
+
+  if (user.monthlyQuotaHours !== null) {
+    input.value = String(user.monthlyQuotaHours);
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'action-button reset-button';
+  button.textContent = 'Enregistrer';
+
+  button.addEventListener('click', async () => {
+    const rawValue = input.value.trim();
+
+    const monthlyQuotaHours =
+      rawValue === ''
+        ? null
+        : Number.parseInt(rawValue, 10);
+
+    if (
+      monthlyQuotaHours !== null &&
+      (
+        !Number.isInteger(monthlyQuotaHours) ||
+        monthlyQuotaHours < 0 ||
+        monthlyQuotaHours > 744
+      )
+    ) {
+      displayPageMessage(
+        'Le quota doit être compris entre 0 et 744 heures.'
+      );
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = 'Enregistrement…';
+
+    try {
+      await requestJson(
+        `/api/admin/users/${encodeURIComponent(user.id)}/quota`,
+        {
+          method: 'PATCH',
+          body: {
+            monthlyQuotaHours,
+          },
+        }
+      );
+
+      displayPageMessage(
+        monthlyQuotaHours === null
+          ? 'Quota illimité enregistré.'
+          : `Quota de ${monthlyQuotaHours} h enregistré.`
+      );
+
+      await refreshUsers();
+      await refreshUsage();
+    } catch (error) {
+      displayPageMessage(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Enregistrer';
+    }
+  });
+
+  wrapper.append(input, button);
+  cell.appendChild(wrapper);
+
+  return cell;
+}
 function displayUsers(data) {
   usersTableBody.replaceChildren();
   tenantName.textContent = data.tenant?.name || '—';
@@ -271,6 +350,7 @@ function displayUsers(data) {
     const row = document.createElement('tr');
     row.appendChild(createCell(user.email));
     row.appendChild(createCell(user.role, 'role-badge'));
+    row.appendChild(createUserQuotaCell(user));
     row.appendChild(createCell(formatDate(user.createdAt)));
 
     const actionsCell = document.createElement('td');
@@ -675,7 +755,7 @@ function displayUsage(data) {
       'Aucune consommation machine sur cette période.',
       'empty-row'
     );
-    cell.colSpan = 5;
+    cell.colSpan = 8;
     row.appendChild(cell);
     usagePayersBody.appendChild(row);
   } else {
@@ -694,6 +774,19 @@ function displayUsage(data) {
       const seconds = Number(
         payer.billableSeconds || 0
       );
+      const usageSeconds = Number(
+  payer.usageSeconds || 0
+);
+
+const quotaText =
+  payer.monthlyQuotaHours === null
+    ? 'Illimité'
+    : `${payer.monthlyQuotaHours} h`;
+
+const remainingText =
+  payer.remainingHours === null
+    ? 'Illimité'
+    : `${payer.remainingHours.toFixed(2)} h`;
 
       const estimate =
         hourlyRate === null
@@ -703,13 +796,15 @@ function displayUsage(data) {
             );
 
       row.append(
-        payerName,
-        payerType,
-        createCell(String(payer.sessionCount || 0)),
-        createCell(formatUsageDuration(seconds)),
-        createCell(estimate)
-      );
-
+  payerName,
+  payerType,
+  createCell(String(payer.sessionCount || 0)),
+  createCell(formatUsageDuration(usageSeconds)),
+  createCell(quotaText),
+  createCell(remainingText),
+  createCell(formatUsageDuration(seconds)),
+  createCell(estimate)
+);
       usagePayersBody.appendChild(row);
     });
   }
