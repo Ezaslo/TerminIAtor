@@ -2344,7 +2344,7 @@ async function resolveAuthorizedProxyContext(
     new Date(launchEntry.expiresAt).getTime() <= Date.now()
   ) {
     throw createProxyAccessError(
-      'Ouverture automatique invalide. Reviens dans Privalyse.',
+      'Ouverture automatique invalide. Reviens dans Prydena.',
       403
     );
   }
@@ -2828,7 +2828,7 @@ async function waitForIaReady(
   }
 
   pushLog(
-    `Workspace Privalyse indisponible apres environ ${totalMinutes} minutes`,
+    `Workspace Prydena indisponible apres environ ${totalMinutes} minutes`,
     'error'
   );
 

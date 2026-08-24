@@ -42,7 +42,7 @@ function displayAuthenticationToolbar(authentication) {
 
   accountAvatar.textContent = initials || '?';
   emailElement.textContent = user.email || displayName;
-  roleElement.textContent = `${user.role || 'Utilisateur'} · ${user.tenantName || 'Privalyse'}`;
+  roleElement.textContent = `${user.role || 'Utilisateur'} · ${user.tenantName || 'Prydena'}`;
   if (isAdminPage) {
     adminLink.href = '/';
     adminLink.textContent = 'Retour à l\'accueil';

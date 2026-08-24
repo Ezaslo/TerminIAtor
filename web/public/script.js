@@ -978,7 +978,7 @@ function humanizeErrorMessage(errorText) {
   }
 
   if (errorText.includes('Terraform introuvable')) {
-    return 'Terraform est introuvable sur le serveur Privalyse.';
+    return 'Terraform est introuvable sur le serveur Prydena.';
   }
 
   if (errorText.includes('VcpuLimitExceeded')) {
