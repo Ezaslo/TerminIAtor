@@ -2,9 +2,52 @@
 let isDestroying = false;
 let eventSource = null;
 let sessionRefreshInterval = null;
+let sessionCountdownInterval = null;
+let activeSessionCardContext = null;
+let serverClockOffsetMs = 0;
 let lastSubmittedSession = null;
-let currentSessionId = null;
+const CURRENT_SESSION_STORAGE_KEY =
+  'privalyse_current_session_id';
+
+function readStoredCurrentSessionId() {
+  try {
+    return window.sessionStorage.getItem(
+      CURRENT_SESSION_STORAGE_KEY
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+function setCurrentSessionId(sessionId) {
+  const normalized =
+    typeof sessionId === 'string' && sessionId.trim() !== ''
+      ? sessionId.trim()
+      : null;
+
+  currentSessionId = normalized;
+
+  try {
+    if (normalized) {
+      window.sessionStorage.setItem(
+        CURRENT_SESSION_STORAGE_KEY,
+        normalized
+      );
+    } else {
+      window.sessionStorage.removeItem(
+        CURRENT_SESSION_STORAGE_KEY
+      );
+    }
+  } catch (_) {
+    // L'application continue même si sessionStorage est indisponible.
+  }
+}
+
+let currentSessionId =
+  readStoredCurrentSessionId();
 let lastKnownSession = null;
+let multipleSessionWarningShown = false;
+let creationBlockedByActiveSession = false;
 
 function authHeaders() {
   return {
@@ -29,7 +72,7 @@ function getSelectedMode() {
 
 function getDurationLabel() {
   const durationSelect = document.getElementById('sessionTtlHours');
-  return durationSelect?.selectedOptions[0]?.textContent.trim() || '6 heures';
+  return durationSelect?.selectedOptions[0]?.textContent.trim() || '1 heure';
 }
 
 function updateWorkspaceNameCount() {
@@ -159,13 +202,13 @@ function updateLifecycleStepper(session = null, operation = {}) {
     stateLabel = 'Destruction';
   } else if (isRunning && operation.type === 'deploy') {
     activeIndex = 1;
-    stateLabel = 'Provisioning';
+    stateLabel = 'Préparation en cours';
   } else if (session?.status === 'ready') {
     activeIndex = 2;
     stateLabel = 'Utilisation';
   } else if (session?.status === 'provisioning') {
     activeIndex = 1;
-    stateLabel = 'Provisioning';
+    stateLabel = 'Préparation en cours';
   }
 
   steps.forEach((step, index) => {
@@ -420,12 +463,11 @@ function validateDeployPayload(payload) {
   }
 
   if (
-    !Number.isInteger(payload.sessionTtlHours) ||
-    payload.sessionTtlHours < 1 ||
-    payload.sessionTtlHours > 168
-  ) {
-    return 'La durée sélectionnée est invalide.';
-  }
+  !Number.isInteger(payload.sessionTtlHours) ||
+  ![1, 2, 3].includes(payload.sessionTtlHours)
+) {
+  return 'La durée doit être de 1, 2 ou 3 heures.';
+}
 
   if (
     !['individual', 'team'].includes(payload.sessionMode)
@@ -441,18 +483,7 @@ function validateDeployPayload(payload) {
 }
 
 function resetUiForNewOperation(operationType) {
-  const logsDiv = document.getElementById('logs');
-  const logsSection = document.getElementById('logsSection');
   const summary = document.getElementById('sessionSummary');
-
-  if (logsDiv) {
-    logsDiv.innerHTML = '';
-  }
-
-  if (logsSection) {
-    logsSection.style.display = 'block';
-    logsSection.open = true;
-  }
 
   if (!summary) return;
 
@@ -467,6 +498,175 @@ function resetUiForNewOperation(operationType) {
   }
 }
 
+function formatTime(value) {
+  if (!value) return '—';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  return date.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatSessionDuration(hours) {
+  const value = Number(hours);
+  if (![1, 2, 3].includes(value)) return '—';
+  return `${value} heure${value > 1 ? 's' : ''}`;
+}
+
+function formatCountdown(milliseconds) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [hours, minutes, seconds]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
+}
+
+function setActiveSessionBadge(kind, label) {
+  const badge = document.getElementById('activeSessionStateBadge');
+  if (!badge) return;
+
+  badge.className = `session-active-badge ${kind}`;
+  const labelElement = badge.querySelector('span');
+  if (labelElement) labelElement.textContent = label;
+}
+
+function updateActiveSessionCountdown() {
+  const countdown = document.getElementById('sessionCountdown');
+  const label = document.getElementById('sessionCountdownLabel');
+  const message = document.getElementById('activeSessionMessage');
+  const card = document.getElementById('activeSessionCard');
+
+  if (!countdown || !label || !message || !card) return;
+
+  const context = activeSessionCardContext;
+  card.classList.remove('is-expiring');
+
+  if (!context) {
+    countdown.textContent = '--:--:--';
+    label.textContent = 'Aucune session active';
+    message.textContent = 'Créez un espace pour démarrer une session sécurisée.';
+    setActiveSessionBadge('neutral', 'Aucune session');
+    return;
+  }
+
+  if (context.status === 'ready' && context.expiresAt) {
+    const expiresMs = new Date(context.expiresAt).getTime();
+    const nowMs = Date.now() + serverClockOffsetMs;
+    const remainingMs = Math.max(0, expiresMs - nowMs);
+
+    countdown.textContent = formatCountdown(remainingMs);
+    label.textContent = remainingMs <= 600000
+      ? 'avant destruction automatique'
+      : 'restantes';
+
+    if (remainingMs <= 0) {
+      message.textContent = 'Expiration atteinte. La destruction va démarrer.';
+      setActiveSessionBadge('warning', 'Expiration');
+      card.classList.add('is-expiring');
+    } else if (remainingMs <= 600000) {
+      message.textContent = 'Destruction prochaine : pensez à terminer votre travail.';
+      setActiveSessionBadge('warning', 'Expiration proche');
+      card.classList.add('is-expiring');
+    } else {
+      message.textContent = 'Espace opérationnel. Votre temps disponible est en cours.';
+      setActiveSessionBadge('success', 'Opérationnel');
+    }
+    return;
+  }
+
+  countdown.textContent = '--:--:--';
+
+  if (context.status === 'provisioning') {
+    label.textContent = 'le chrono démarre quand l’espace est prêt';
+    message.textContent = `Préparation en cours : votre durée de ${context.durationLabel || 'session'} ne diminue pas encore.`;
+    setActiveSessionBadge('warning', 'Préparation');
+  } else if (context.status === 'destroying') {
+    label.textContent = 'suppression sécurisée en cours';
+    message.textContent = 'Les ressources temporaires de la session sont en cours de destruction.';
+    setActiveSessionBadge('warning', 'Destruction');
+  } else if (context.status === 'error' || context.status === 'failed') {
+    label.textContent = 'session indisponible';
+    message.textContent = 'La session a rencontré une erreur. Le décompte utilisateur n’est pas présenté comme actif.';
+    setActiveSessionBadge('danger', 'Échec');
+  } else {
+    label.textContent = 'état de la session';
+    message.textContent = 'La session est en cours de traitement.';
+    setActiveSessionBadge('neutral', 'En attente');
+  }
+}
+
+function renderActiveSessionCard(
+  session,
+  draftSession = null,
+  operation = {}
+) {
+  const displayedSession = session || draftSession || lastSubmittedSession;
+  const isRunning = operation.status === 'running';
+
+  let status = displayedSession?.status || null;
+  if (isRunning && operation.type === 'destroy') {
+    status = 'destroying';
+  } else if (isRunning && operation.type === 'deploy') {
+    status = 'provisioning';
+  }
+
+  if (session?.now) {
+    const serverNowMs = new Date(session.now).getTime();
+    if (!Number.isNaN(serverNowMs)) {
+      serverClockOffsetMs = serverNowMs - Date.now();
+    }
+  }
+
+  const createdAt = document.getElementById('activeSessionCreatedAt');
+  const readyAt = document.getElementById('activeSessionReadyAt');
+  const expiresAt = document.getElementById('activeSessionExpiresAt');
+  const mode = document.getElementById('activeSessionMode');
+  const duration = document.getElementById('activeSessionDuration');
+  const access = document.getElementById('activeSessionAccess');
+
+  if (!displayedSession && !isRunning) {
+    activeSessionCardContext = null;
+    if (createdAt) createdAt.textContent = '—';
+    if (readyAt) readyAt.textContent = '—';
+    if (expiresAt) expiresAt.textContent = '—';
+    if (mode) mode.textContent = '—';
+    if (duration) duration.textContent = '—';
+    if (access) access.textContent = '—';
+    updateActiveSessionCountdown();
+    return;
+  }
+
+  const sessionMode = displayedSession?.sessionMode || displayedSession?.mode || 'individual';
+  const memberCount = Number(displayedSession?.teamSizeHint || displayedSession?.memberCount || 0);
+
+  if (createdAt) createdAt.textContent = formatTime(displayedSession?.createdAt);
+  if (readyAt) readyAt.textContent = formatTime(displayedSession?.readyAt);
+  if (expiresAt) expiresAt.textContent = formatTime(displayedSession?.expiresAt);
+  if (mode) mode.textContent = sessionMode === 'team' ? 'Équipe' : 'Individuel';
+  if (duration) duration.textContent = formatSessionDuration(displayedSession?.sessionTtlHours);
+  if (access) {
+    access.textContent = sessionMode === 'team'
+      ? memberCount > 1
+        ? `${memberCount} membres autorisés`
+        : 'Équipe autorisée'
+      : 'Vous uniquement';
+  }
+
+  activeSessionCardContext = {
+    status: status || 'unknown',
+    expiresAt: displayedSession?.expiresAt || null,
+    durationLabel: formatSessionDuration(displayedSession?.sessionTtlHours)
+  };
+
+  updateActiveSessionCountdown();
+}
+
 function formatDateTime(value) {
   if (!value) return 'Non disponible';
 
@@ -477,6 +677,84 @@ function formatDateTime(value) {
   }
 
   return date.toLocaleString('fr-FR');
+}
+
+function getSessionStatusLabel(status) {
+  if (status === 'ready') return 'Prête';
+  if (status === 'provisioning') return 'Préparation';
+  if (status === 'error') return 'Erreur';
+  return status || 'En cours';
+}
+
+function renderSessionSelector(sessions = []) {
+  const summary = document.getElementById('sessionSummary');
+  const openSessionBtn = document.getElementById('openSessionBtn');
+  const destroyBtn = document.getElementById('destroyBtn');
+
+  if (!summary) return;
+
+  const safeSessions = Array.isArray(sessions)
+    ? sessions
+    : [];
+
+  summary.classList.remove('empty-state');
+  summary.classList.add('has-session');
+
+  const options = safeSessions
+    .map((item) => {
+      const ownerLabel = item.isOwner
+        ? 'créée par vous'
+        : 'partagée';
+      const shortId = String(item.id || '').slice(0, 8);
+
+      return (
+        `<option value="${escapeHtml(item.id)}">` +
+        `${escapeHtml(item.name || 'Espace')} — ` +
+        `${escapeHtml(getSessionStatusLabel(item.status))} — ` +
+        `${escapeHtml(ownerLabel)} — ${escapeHtml(shortId)}` +
+        `</option>`
+      );
+    })
+    .join('');
+
+  summary.innerHTML =
+    '<div class="session-status">' +
+      '<span class="status-pill warning"><i></i>Sélection requise</span>' +
+    '</div>' +
+    '<strong class="session-title">Plusieurs espaces sont actifs</strong>' +
+    '<span style="color:var(--text-secondary);margin-top:6px;">' +
+      'Sélectionnez explicitement l’espace à ouvrir ou à supprimer.' +
+    '</span>' +
+    '<select id="activeSessionSelector" ' +
+      'style="margin-top:14px;width:100%;height:42px;border-radius:8px;' +
+      'border:1px solid var(--border);background:var(--field-bg);' +
+      'color:var(--text-primary);padding:0 12px;">' +
+      '<option value="">Choisir un espace…</option>' +
+      options +
+    '</select>';
+
+  if (openSessionBtn) {
+    openSessionBtn.disabled = true;
+  }
+
+  if (destroyBtn) {
+    destroyBtn.disabled = true;
+  }
+
+  const selector =
+    document.getElementById('activeSessionSelector');
+
+  selector?.addEventListener('change', () => {
+    const selectedId = selector.value || null;
+
+    if (!selectedId) {
+      return;
+    }
+
+    setCurrentSessionId(selectedId);
+    multipleSessionWarningShown = false;
+    refreshSessionSummary();
+  });
 }
 
 function applyOperationState(operation = {}) {
@@ -490,11 +768,14 @@ function applyOperationState(operation = {}) {
   isDestroying = isRunning && operation.type === 'destroy';
 
   if (deployBtn) {
-    deployBtn.disabled = isRunning;
+    deployBtn.disabled =
+      isRunning || creationBlockedByActiveSession;
     deployBtn.classList.toggle('running', isDeploying);
     deployBtn.textContent = isDeploying
       ? 'Création en cours...'
-      : 'Créer l’espace sécurisé';
+      : creationBlockedByActiveSession
+        ? 'Une session est déjà active'
+        : 'Créer l’espace sécurisé';
   }
 
   if (openSessionBtn && isRunning) {
@@ -502,7 +783,8 @@ function applyOperationState(operation = {}) {
   }
 
   if (destroyBtn) {
-    destroyBtn.disabled = isRunning;
+    destroyBtn.disabled =
+      isRunning || !currentSessionId;
     destroyBtn.classList.toggle('running', isDestroying);
     destroyBtn.textContent = isDestroying
       ? 'Suppression en cours...'
@@ -602,14 +884,60 @@ function renderSessionSummary(
 
 async function refreshSessionSummary() {
   try {
-    const response = await fetch('/api/session');
+    const requestUrl = currentSessionId
+      ? `/api/session?sessionId=${encodeURIComponent(currentSessionId)}`
+      : '/api/session';
 
-    if (!response.ok) return;
+    const response = await fetch(requestUrl);
+
+    if (!response.ok) {
+      // Un identifiant mémorisé peut devenir invalide après destruction,
+      // expiration, changement de compte ou retrait d'un groupe.
+      if (
+        currentSessionId &&
+        (response.status === 400 || response.status === 403)
+      ) {
+        setCurrentSessionId(null);
+        return refreshSessionSummary();
+      }
+      return;
+    }
 
     const data = await response.json();
+if (
+  !data.session &&
+  !data.draftSession &&
+  !data.selectionRequired &&
+  data.operation?.status !== 'running'
+) {
+  lastSubmittedSession = null;
+  setCurrentSessionId(null);
+}
+    creationBlockedByActiveSession =
+      data.canCreateSession === false;
 
-    currentSessionId =
+    const selectedSessionId =
       data.session?.databaseSessionId || null;
+
+    if (selectedSessionId) {
+      setCurrentSessionId(selectedSessionId);
+      multipleSessionWarningShown = false;
+    } else if (data.selectionRequired) {
+      // Plusieurs sessions sont accessibles : aucune sélection implicite.
+      setCurrentSessionId(null);
+
+      if (!multipleSessionWarningShown) {
+        addLog(
+          'Plusieurs sessions sont accessibles. Sélectionnez explicitement l’espace à ouvrir ou à supprimer.',
+          'info'
+        );
+        multipleSessionWarningShown = true;
+      }
+    } else {
+      setCurrentSessionId(null);
+      multipleSessionWarningShown = false;
+    }
+
     lastKnownSession = data.session || data.draftSession || null;
 
     applyOperationState(data.operation || {});
@@ -617,11 +945,21 @@ async function refreshSessionSummary() {
       data.session || data.draftSession || null,
       data.operation || {}
     );
-    renderSessionSummary(
+    renderActiveSessionCard(
       data.session || null,
       data.draftSession || null,
       data.operation || {}
     );
+
+    if (data.selectionRequired) {
+      renderSessionSelector(data.sessions || []);
+    } else {
+      renderSessionSummary(
+        data.session || null,
+        data.draftSession || null,
+        data.operation || {}
+      );
+    }
   } catch (_) {
     // On conserve l’état actuel en cas d’erreur réseau temporaire.
   }
@@ -640,7 +978,7 @@ function humanizeErrorMessage(errorText) {
   }
 
   if (errorText.includes('Terraform introuvable')) {
-    return 'Terraform est introuvable sur le serveur Privalyse.';
+    return 'Terraform est introuvable sur le serveur Prydena.';
   }
 
   if (errorText.includes('VcpuLimitExceeded')) {
@@ -658,13 +996,21 @@ function setupDeployButton() {
   deployBtn.addEventListener('click', async () => {
     if (isDeploying) return;
 
+    if (creationBlockedByActiveSession) {
+  showAppToast(
+    'Une session est déjà active pour votre compte. Supprimez-la avant d’en créer une nouvelle.',
+    'error'
+  );
+  return;
+}
+
     const payload = collectDeployPayload();
     const validationError = validateDeployPayload(payload);
 
     if (validationError) {
-      window.alert(validationError);
-      return;
-    }
+  showAppToast(validationError, 'error');
+  return;
+}
 
     resetUiForNewOperation('deploy');
 
@@ -701,21 +1047,31 @@ function setupDeployButton() {
           if (data?.error) {
             errorText = data.error;
           }
+
+          if (data?.code === 'ACTIVE_SESSION_EXISTS') {
+            creationBlockedByActiveSession = true;
+
+            if (data?.sessionId) {
+              setCurrentSessionId(data.sessionId);
+            }
+          }
         } catch (_) {
           // La réponse du serveur n’est pas au format JSON.
         }
 
         errorText = humanizeErrorMessage(errorText);
         addLog(`Erreur de création : ${errorText}`, 'error');
-        window.alert(errorText);
+        showAppToast(errorText, 'error');
         return;
       }
 
       const data = await response.json();
 
       if (data?.sessionId) {
-        currentSessionId = data.sessionId;
+        setCurrentSessionId(data.sessionId);
       }
+
+      creationBlockedByActiveSession = true;
 
       addLog(
         'La création de l’espace sécurisé a été lancée.',
@@ -729,12 +1085,19 @@ function setupDeployButton() {
         'error'
       );
 
-      window.alert('Impossible de contacter le serveur.');
+      showAppToast(
+  'Impossible de contacter le serveur.',
+  'error'
+);
     } finally {
       isDeploying = false;
-      deployBtn.disabled = false;
+      deployBtn.disabled =
+        creationBlockedByActiveSession;
       deployBtn.classList.remove('running');
-      deployBtn.textContent = 'Créer l’espace sécurisé';
+      deployBtn.textContent =
+        creationBlockedByActiveSession
+          ? 'Une session est déjà active'
+          : 'Créer l’espace sécurisé';
     }
   });
 }
@@ -903,7 +1266,7 @@ function setupDestroyButton() {
         }
 
         lastSubmittedSession = null;
-        currentSessionId = null;
+        setCurrentSessionId(null);
 
         addLog(
           'L’espace et ses données ont été supprimés.',
@@ -922,7 +1285,8 @@ function setupDestroyButton() {
       } finally {
         isDestroying = false;
 
-        destroyBtn.disabled = false;
+        destroyBtn.disabled =
+          !currentSessionId;
         destroyBtn.classList.remove(
           'running'
         );
@@ -988,14 +1352,40 @@ function setupOpenSessionButton() {
       addLog('L’espace sécurisé a été ouvert.', 'success');
     } catch (error) {
       addLog(`Erreur d’ouverture : ${error.message}`, 'error');
-      window.alert(error.message);
+     showAppToast(error.message, 'error');
     } finally {
       openSessionBtn.textContent = initialText;
       refreshSessionSummary();
     }
   });
 }
+function showAppToast(message, type = 'error') {
+  const existing = document.getElementById('app-toast');
+  existing?.remove();
 
+  const toast = document.createElement('div');
+  toast.id = 'app-toast';
+  toast.className = `app-toast app-toast--${type}`;
+
+  const text = document.createElement('span');
+  text.textContent = message;
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  close.setAttribute('aria-label', 'Fermer');
+
+  close.addEventListener('click', () => {
+    toast.remove();
+  });
+
+  toast.append(text, close);
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 7000);
+}
 document.addEventListener('DOMContentLoaded', () => {
   setupFormInteractions();
   setupDeployButton();
@@ -1003,10 +1393,228 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDestroyButton();
   updateLifecycleStepper(null, {});
 
-  connectLogStream();
+  renderActiveSessionCard(null, null, {});
   refreshSessionSummary();
   sessionRefreshInterval =
     window.setInterval(refreshSessionSummary, 15000);
+  sessionCountdownInterval =
+    window.setInterval(updateActiveSessionCountdown, 1000);
 });
+// =========================================================
+// CONSOMMATION MENSUELLE
+// =========================================================
 
+const usageCardEl =
+  document.getElementById('monthlyUsageCard');
+
+const usageContextEl =
+  document.getElementById('monthlyUsageContext');
+
+const usageRemainingEl =
+  document.getElementById('monthlyUsageRemaining');
+
+const usageProgressEl =
+  document.getElementById('monthlyUsageProgressBar');
+
+const usageUsedEl =
+  document.getElementById('monthlyUsageUsed');
+
+const usageQuotaEl =
+  document.getElementById('monthlyUsageQuota');
+
+
+function formatMonthlyUsageHours(hours) {
+  const totalMinutes = Math.round(
+    Number(hours || 0) * 60
+  );
+
+  const wholeHours = Math.floor(
+    totalMinutes / 60
+  );
+
+  const minutes = totalMinutes % 60;
+
+  if (wholeHours === 0) {
+    return `${minutes} min`;
+  }
+
+  if (minutes === 0) {
+    return `${wholeHours} h`;
+  }
+
+  return `${wholeHours} h ${minutes} min`;
+}
+
+
+async function refreshMonthlyUsage() {
+  if (
+    !usageCardEl ||
+    !usageContextEl ||
+    !usageRemainingEl ||
+    !usageProgressEl ||
+    !usageUsedEl ||
+    !usageQuotaEl
+  ) {
+    return;
+  }
+
+  const selectedMode =
+    document.querySelector(
+      'input[name="sessionMode"]:checked'
+    )?.value || 'individual';
+
+  const groupSelect =
+    document.getElementById('groupId');
+
+  usageCardEl.classList.remove(
+    'warning',
+    'danger'
+  );
+
+  usageRemainingEl.textContent =
+    'Chargement…';
+
+  usageUsedEl.textContent = '—';
+  usageQuotaEl.textContent = '—';
+  usageProgressEl.style.width = '0%';
+
+  let url =
+    '/api/usage/quota?mode=individual';
+
+  if (selectedMode === 'team') {
+    const groupId =
+      groupSelect?.value || '';
+
+    if (!groupId) {
+      usageContextEl.textContent =
+        'Équipe';
+
+      usageRemainingEl.textContent =
+        'Sélectionnez un groupe';
+
+      return;
+    }
+
+    const selectedGroupName =
+      groupSelect.options[
+        groupSelect.selectedIndex
+      ]?.textContent?.trim() || 'Équipe';
+
+    usageContextEl.textContent =
+      selectedGroupName;
+
+    url =
+      `/api/usage/quota?mode=team&groupId=${encodeURIComponent(groupId)}`;
+  } else {
+    usageContextEl.textContent =
+      'Personnel';
+  }
+
+  try {
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(
+        data.error ||
+        'Impossible de charger la consommation.'
+      );
+    }
+
+    const quota = data.quota || {};
+
+    const usedHours =
+      Number(quota.usedHours || 0);
+
+    const monthlyQuotaHours =
+      quota.monthlyQuotaHours === null ||
+      quota.monthlyQuotaHours === undefined
+        ? null
+        : Number(quota.monthlyQuotaHours);
+
+    const remainingHours =
+      quota.remainingHours === null ||
+      quota.remainingHours === undefined
+        ? null
+        : Number(quota.remainingHours);
+
+    usageUsedEl.textContent =
+      `${formatMonthlyUsageHours(usedHours)} utilisées`;
+
+    if (monthlyQuotaHours === null) {
+      usageRemainingEl.textContent =
+        'Quota illimité';
+
+      usageQuotaEl.textContent =
+        'Quota : illimité';
+
+      usageProgressEl.style.width = '0%';
+
+      return;
+    }
+
+    usageQuotaEl.textContent =
+      `Quota : ${formatMonthlyUsageHours(monthlyQuotaHours)}`;
+
+    usageRemainingEl.textContent =
+      `${formatMonthlyUsageHours(remainingHours)} restantes`;
+
+    const percentage =
+      monthlyQuotaHours === 0
+        ? 100
+        : Math.min(
+            100,
+            (usedHours / monthlyQuotaHours) * 100
+          );
+
+    usageProgressEl.style.width =
+      `${percentage}%`;
+
+    if (percentage >= 100) {
+      usageCardEl.classList.add('danger');
+    } else if (percentage >= 80) {
+      usageCardEl.classList.add('warning');
+    }
+  } catch (error) {
+    console.error(
+      'Erreur consommation mensuelle :',
+      error
+    );
+
+    usageRemainingEl.textContent =
+      'Indisponible';
+
+    usageUsedEl.textContent =
+      'Impossible de charger la consommation';
+  }
+}
+
+
+// Chargement initial
+refreshMonthlyUsage();
+
+
+// Changement Individuel / Équipe
+document
+  .querySelectorAll(
+    'input[name="sessionMode"]'
+  )
+  .forEach((radio) => {
+    radio.addEventListener(
+      'change',
+      refreshMonthlyUsage
+    );
+  });
+
+
+// Changement de groupe
+document
+  .getElementById('groupId')
+  ?.addEventListener(
+    'change',
+    refreshMonthlyUsage
+  );
 

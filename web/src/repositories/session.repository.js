@@ -230,6 +230,7 @@ async function createSession(session) {
         status,
         terraform_directory,
         expires_at,
+        session_ttl_hours,
         session_mode,
         group_id
       )
@@ -243,7 +244,8 @@ async function createSession(session) {
         $7,
         $8,
         $9,
-        $10
+        $10,
+        $11
       )
       RETURNING *
     `,
@@ -256,6 +258,7 @@ async function createSession(session) {
       session.status || 'queued',
       session.terraformDirectory || null,
       session.expiresAt || null,
+      session.sessionTtlHours || null,
       session.sessionMode || 'individual',
       session.groupId || null,
     ]
@@ -287,6 +290,7 @@ async function listSessionsByTenantId(tenantId) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,
@@ -342,6 +346,7 @@ async function listSessionsForUser(
         sessions.created_at,
         sessions.updated_at,
         sessions.expires_at,
+        sessions.session_ttl_hours,
         sessions.destroyed_at,
         sessions.session_mode,
         sessions.group_id,
@@ -401,6 +406,7 @@ async function getSessionById(sessionId) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,
@@ -512,6 +518,7 @@ async function listExpiredSessions(limit = 10) {
         created_at,
         updated_at,
         expires_at,
+        session_ttl_hours,
         destroyed_at,
         session_mode,
         group_id,
@@ -536,6 +543,34 @@ async function listExpiredSessions(limit = 10) {
 
   return result.rows;
 }
+async function listFutureExpiringSessions(limit = 100) {
+  const normalizedLimit =
+    Number.isInteger(limit) && limit > 0
+      ? Math.min(limit, 1000)
+      : 100;
+
+  const result = await database.query(
+    `
+      SELECT
+        id,
+        status,
+        expires_at,
+        terraform_directory
+      FROM sessions
+      WHERE
+        expires_at IS NOT NULL
+        AND expires_at > NOW()
+        AND status <> 'destroyed'
+        AND terraform_directory IS NOT NULL
+        AND terraform_directory <> ''
+      ORDER BY expires_at ASC
+      LIMIT $1
+    `,
+    [normalizedLimit]
+  );
+
+  return result.rows;
+}
 async function markSessionDestroyed(sessionId) {
   const result = await database.query(
     `
@@ -551,6 +586,26 @@ async function markSessionDestroyed(sessionId) {
     [
       sessionId,
     ]
+  );
+
+  return result.rows[0] || null;
+}
+async function clearDestroyedSessionInfrastructureMetadata(sessionId) {
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        elastic_ip = NULL,
+        dns_name = NULL,
+        access_url = NULL,
+        terraform_directory = NULL,
+        updated_at = NOW()
+      WHERE
+        id = $1
+        AND status = 'destroyed'
+      RETURNING *
+    `,
+    [sessionId]
   );
 
   return result.rows[0] || null;
@@ -636,8 +691,10 @@ module.exports = {
   updateSessionStatus,
   updateSessionInfrastructure,
   getSessionById,
+  clearDestroyedSessionInfrastructureMetadata,
   canUserAccessSession,
   getSessionSecrets,
+  listFutureExpiringSessions,
   listExpiredSessions,
   clearSessionState,
   clearSessionSecrets,

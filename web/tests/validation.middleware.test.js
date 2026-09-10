@@ -1,7 +1,9 @@
-const test = require('node:test');
+﻿const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const validation = require('../src/middleware/validation.middleware');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function createResponse() {
   return {
@@ -66,7 +68,7 @@ test('validateInvitationToken rejects oversized lookup tokens', () => {
 });
 
 test('validateDeployment rejects oversized team groups', () => {
-  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'a'.repeat(129) } };
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 1, groupId: 'a'.repeat(129) } };
   const res = createResponse();
   const next = createNext();
   validation.validateDeployment(req, res, next);
@@ -75,10 +77,23 @@ test('validateDeployment rejects oversized team groups', () => {
 });
 
 test('validateDeployment accepts a valid team group', () => {
-  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 8, groupId: 'group-123' } };
+  const req = { body: { workspaceName: 'workspace-team', sessionMode: 'team', sessionTtlHours: 1, groupId: 'group-123' } };
   const res = createResponse();
   const next = createNext();
   validation.validateDeployment(req, res, next);
   assert.equal(next.called, true);
   assert.equal(req.body.groupId, 'group-123');
+});
+
+test('markReady starts the user TTL at first ready and marks the session ready', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../src/repositories/usage.repository.js'),
+    'utf8'
+  );
+
+  assert.match(source, /status\s*=\s*'ready'/);
+  assert.match(source, /ready_at\s*=\s*COALESCE\(ready_at,\s*NOW\(\)\)/);
+  assert.match(source, /WHEN\s+ready_at\s+IS\s+NULL[\s\S]*session_ttl_hours\s+IS\s+NOT\s+NULL/);
+  assert.match(source, /NOW\(\)\s*\+\s*\(session_ttl_hours\s*\*\s*INTERVAL\s*'1 hour'\)/);
+  assert.match(source, /ELSE\s+expires_at/);
 });

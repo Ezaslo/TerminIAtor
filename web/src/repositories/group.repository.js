@@ -18,6 +18,7 @@ async function listGroupsByTenantId(tenantId) {
         groups.tenant_id,
         groups.name,
         groups.created_by,
+        groups.monthly_quota_hours,
         groups.created_at,
 
         COALESCE(
@@ -328,6 +329,7 @@ async function listGroupsByUserId(
         groups.name,
         groups.created_by,
         groups.created_at,
+        groups.monthly_quota_hours,
 
         COALESCE(
           JSON_AGG(
@@ -381,9 +383,38 @@ async function listGroupsByUserId(
 
   return result.rows;
 }
+async function updateMonthlyQuotaByIdAndTenantId({
+  groupId,
+  tenantId,
+  monthlyQuotaHours,
+}) {
+  const result = await database.query(
+    `
+      UPDATE groups
+      SET monthly_quota_hours = $3
+      WHERE id = $1
+        AND tenant_id = $2
+      RETURNING
+        id,
+        tenant_id,
+        name,
+        created_by,
+        monthly_quota_hours,
+        created_at
+    `,
+    [
+      groupId,
+      tenantId,
+      monthlyQuotaHours,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 module.exports = {
   listGroupsByTenantId,
   listGroupsByUserId,
+  updateMonthlyQuotaByIdAndTenantId,
   createGroup,
   findGroupById,
   listGroupMembers,

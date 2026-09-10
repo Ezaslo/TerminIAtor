@@ -37,11 +37,11 @@ variable "workspace_slug" {
 variable "session_ttl_hours" {
   description = "Duree cible de la session en heures"
   type        = number
-  default     = 8
+  default     = 1
 
   validation {
-    condition     = var.session_ttl_hours >= 1 && var.session_ttl_hours <= 168
-    error_message = "session_ttl_hours doit etre compris entre 1 et 168."
+    condition     = contains([1, 2, 3], var.session_ttl_hours)
+    error_message = "session_ttl_hours doit etre egal a 1, 2 ou 3."
   }
 }
 

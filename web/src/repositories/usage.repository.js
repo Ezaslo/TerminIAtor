@@ -54,7 +54,14 @@ async function markReady(sessionId) {
     `
       UPDATE sessions
       SET
+        status = 'ready',
         ready_at = COALESCE(ready_at, NOW()),
+        expires_at = CASE
+          WHEN ready_at IS NULL
+            AND session_ttl_hours IS NOT NULL
+          THEN NOW() + (session_ttl_hours * INTERVAL '1 hour')
+          ELSE expires_at
+        END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *
@@ -114,6 +121,8 @@ async function listTenantUsage(
         sessions.destroyed_at,
         creator.email AS creator_email,
         billing_group.name AS group_name,
+        creator.monthly_quota_hours AS creator_monthly_quota_hours,
+        billing_group.monthly_quota_hours AS group_monthly_quota_hours,
         COUNT(DISTINCT session_access_events.id)::int AS access_count,
         (
           SELECT COUNT(*)::int
@@ -163,6 +172,34 @@ async function listTenantUsage(
             )
           )
         )::BIGINT AS billable_seconds
+        ,
+CASE
+  WHEN sessions.ready_at IS NULL THEN 0
+  ELSE GREATEST(
+    0,
+    EXTRACT(
+      EPOCH FROM (
+        LEAST(
+          COALESCE(
+            sessions.destroyed_at,
+            sessions.expires_at,
+            NOW()
+          ),
+          COALESCE(
+            sessions.expires_at,
+            NOW()
+          ),
+          $3::TIMESTAMPTZ
+        )
+        -
+        GREATEST(
+          sessions.ready_at,
+          $2::TIMESTAMPTZ
+        )
+      )
+    )
+  )::BIGINT
+END AS usage_seconds
       FROM sessions
       LEFT JOIN users AS creator
         ON creator.id = sessions.created_by_user_id
@@ -183,7 +220,9 @@ async function listTenantUsage(
       GROUP BY
         sessions.id,
         creator.email,
-        billing_group.name
+        billing_group.name,
+        creator.monthly_quota_hours,
+        billing_group.monthly_quota_hours
       ORDER BY sessions.machine_started_at DESC
     `,
     [
@@ -195,11 +234,165 @@ async function listTenantUsage(
 
   return result.rows;
 }
+async function getMonthlyQuotaStatus({
+  tenantId,
+  userId,
+  sessionMode,
+  groupId = null,
+  requestedHours = 0,
+}) {
+  const isTeam = sessionMode === 'team';
 
+  const quotaResult = isTeam
+    ? await database.query(
+        `
+          SELECT monthly_quota_hours
+          FROM groups
+          WHERE id = $1
+            AND tenant_id = $2
+          LIMIT 1
+        `,
+        [groupId, tenantId]
+      )
+    : await database.query(
+        `
+          SELECT monthly_quota_hours
+          FROM users
+          WHERE id = $1
+            AND tenant_id = $2
+          LIMIT 1
+        `,
+        [userId, tenantId]
+      );
+
+  const monthlyQuotaHours =
+    quotaResult.rows[0]?.monthly_quota_hours ?? null;
+
+  const usageResult = await database.query(
+    `
+      WITH bounds AS (
+        SELECT
+          (
+            DATE_TRUNC(
+              'month',
+              NOW() AT TIME ZONE 'UTC'
+            ) AT TIME ZONE 'UTC'
+          ) AS month_start,
+          (
+            DATE_TRUNC(
+              'month',
+              NOW() AT TIME ZONE 'UTC'
+            ) AT TIME ZONE 'UTC'
+            + INTERVAL '1 month'
+          ) AS month_end
+      )
+      SELECT
+        COALESCE(
+          SUM(
+            GREATEST(
+              0,
+              EXTRACT(
+                EPOCH FROM (
+                  LEAST(
+                    COALESCE(
+                      sessions.destroyed_at,
+                      sessions.expires_at,
+                      NOW()
+                    ),
+                    COALESCE(
+                      sessions.expires_at,
+                      NOW()
+                    ),
+                    NOW(),
+                    bounds.month_end
+                  )
+                  -
+                  GREATEST(
+                    sessions.ready_at,
+                    bounds.month_start
+                  )
+                )
+              )
+            )
+          ),
+          0
+        )::BIGINT AS used_seconds
+      FROM sessions
+      CROSS JOIN bounds
+      WHERE sessions.tenant_id = $1
+        AND sessions.ready_at IS NOT NULL
+        AND sessions.ready_at < bounds.month_end
+        AND (
+          (
+            $3 = 'team'
+            AND (
+              (
+                sessions.billing_owner_type = 'group'
+                AND sessions.billing_owner_id = $4
+              )
+              OR (
+                sessions.billing_owner_type IS NULL
+                AND sessions.session_mode = 'team'
+                AND sessions.group_id = $4
+              )
+            )
+          )
+          OR
+          (
+            $3 <> 'team'
+            AND (
+              (
+                sessions.billing_owner_type = 'user'
+                AND sessions.billing_owner_id = $2
+              )
+              OR (
+                sessions.billing_owner_type IS NULL
+                AND sessions.session_mode = 'individual'
+                AND sessions.created_by_user_id = $2
+              )
+            )
+          )
+        )
+    `,
+    [
+      tenantId,
+      userId,
+      sessionMode,
+      groupId,
+    ]
+  );
+
+  const usedSeconds =
+    Number(usageResult.rows[0]?.used_seconds || 0);
+
+  const usedHours = usedSeconds / 3600;
+
+  const remainingHours =
+    monthlyQuotaHours === null
+      ? null
+      : Math.max(
+          0,
+          monthlyQuotaHours - usedHours
+        );
+
+  const allowed =
+    monthlyQuotaHours === null ||
+    usedHours + requestedHours <= monthlyQuotaHours;
+
+  return {
+    monthlyQuotaHours,
+    usedSeconds,
+    usedHours,
+    remainingHours,
+    requestedHours,
+    allowed,
+  };
+}
 module.exports = {
   setBillingOwnerSnapshot,
   markMachineStarted,
   markReady,
+  getMonthlyQuotaStatus,
   recordAccess,
   listTenantUsage,
 };

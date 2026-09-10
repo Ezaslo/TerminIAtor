@@ -78,6 +78,18 @@ router.delete(
   adminController.deleteUser
 );
 router.patch(
+  '/users/:userId/quota',
+
+  authMiddleware.authenticate,
+
+  authMiddleware.requireRole(
+    'owner',
+    'admin'
+  ),
+
+  adminController.updateUserQuota
+);
+router.patch(
   '/users/:userId/password',
 
   authMiddleware.authenticate,

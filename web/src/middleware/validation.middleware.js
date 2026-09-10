@@ -177,17 +177,15 @@ function validateDeployment(req, res, next) {
 
   
 
-  if (
-    !Number.isInteger(sessionTtlHours) ||
-    sessionTtlHours < 1 ||
-    sessionTtlHours > 168
-  ) {
-    return res.status(400).json({
-      ok: false,
-      error:
-        'La durée de session doit être comprise entre 1 et 168 heures.'
-    });
-  }
+ if (
+  !Number.isInteger(sessionTtlHours) ||
+  ![1, 2, 3].includes(sessionTtlHours)
+) {
+  return res.status(400).json({
+    ok: false,
+    error: 'La durée de session doit être de 1, 2 ou 3 heures.'
+  });
+}
 
   if (sessionMode === 'team' && !groupId) {
     return res.status(400).json({

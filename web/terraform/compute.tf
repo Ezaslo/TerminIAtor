@@ -30,7 +30,7 @@ resource "openstack_compute_instance_v2" "ai_host" {
   config_drive = true
 
   security_groups = [
-    data.openstack_networking_secgroup_v2.shared.name
+    openstack_networking_secgroup_v2.session.name
   ]
 
   block_device {

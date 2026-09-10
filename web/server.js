@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const database = require('./src/database/database');
 const healthRoutes = require('./src/routes/health.routes');
 
@@ -46,6 +47,10 @@ const authMiddleware = require(
 );
 const app = express();
 const proxyApp = express();
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+  proxyApp.set('trust proxy', 1);
+}
 proxyApp.use(authMiddleware.authenticate);
 
 const PORT = config.port;
@@ -131,19 +136,151 @@ app.use(express.static('public'));
 
 const clients = [];
 
-// Une seule opération Terraform est encore exécutée à la fois dans ce MVP,
-// mais son contexte est maintenant explicitement rattaché à l'utilisateur
-// et à la session concernés. Cela évite d'exposer son état aux autres comptes.
-const currentOperation = {
-  type: 'idle',
-  status: 'idle',
-  phase: 'idle',
-  cancelReadiness: false,
-  sessionId: null,
-  userId: null,
-  tenantId: null,
-  logs: []
-};
+// Les opérations Terraform sont isolées par session.
+// AsyncLocalStorage permet aux logs Terraform/readiness de rester rattachés
+// à la bonne opération même lorsque plusieurs workspaces sont provisionnés
+// en parallèle.
+const operationContext = new AsyncLocalStorage();
+const sessionOperations = new Map();
+const pendingDeployOperationsByUser = new Map();
+
+function createOperation({
+  type,
+  sessionId = null,
+  userId = null,
+  tenantId = null,
+}) {
+  return {
+    id: crypto.randomUUID(),
+    type,
+    status: 'running',
+    phase: 'terraform',
+    cancelReadiness: false,
+    sessionId,
+    userId,
+    tenantId,
+    logs: [],
+    startedAt: new Date().toISOString(),
+  };
+}
+
+function getCurrentOperation() {
+  return operationContext.getStore() || null;
+}
+
+function getRunningOperationForSession(sessionId) {
+  if (!sessionId) return null;
+
+  const operation = sessionOperations.get(sessionId) || null;
+
+  return operation?.status === 'running'
+    ? operation
+    : null;
+}
+
+function getRunningDeployForUser(userId) {
+  if (!userId) return null;
+
+  const operation =
+    pendingDeployOperationsByUser.get(userId) || null;
+
+  if (
+    operation?.type === 'deploy' &&
+    operation.status === 'running'
+  ) {
+    return operation;
+  }
+
+  for (const candidate of sessionOperations.values()) {
+    if (
+      candidate.userId === userId &&
+      candidate.type === 'deploy' &&
+      candidate.status === 'running'
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function bindOperationToSession(operation, sessionId) {
+  if (!operation || !sessionId) return;
+
+  operation.sessionId = sessionId;
+  sessionOperations.set(sessionId, operation);
+
+  if (
+    operation.userId &&
+    pendingDeployOperationsByUser.get(operation.userId) === operation
+  ) {
+    pendingDeployOperationsByUser.delete(operation.userId);
+  }
+}
+
+function getVisibleOperationForUser(
+  userId,
+  accessibleSessions = []
+) {
+  const pending =
+    pendingDeployOperationsByUser.get(userId) || null;
+
+  if (pending?.status === 'running') {
+    return pending;
+  }
+
+  const accessibleSessionIds = new Set(
+    accessibleSessions
+      .map((session) => session?.id)
+      .filter(Boolean)
+  );
+
+  const candidates = Array.from(
+    sessionOperations.values()
+  ).filter((operation) =>
+    operation.userId === userId ||
+    accessibleSessionIds.has(operation.sessionId)
+  );
+
+  candidates.sort((left, right) => {
+    const runningDifference =
+      Number(right.status === 'running') -
+      Number(left.status === 'running');
+
+    if (runningDifference !== 0) {
+      return runningDifference;
+    }
+
+    return (
+      new Date(right.startedAt).getTime() -
+      new Date(left.startedAt).getTime()
+    );
+  });
+
+  return candidates[0] || null;
+}
+
+function getReplayLogsForUser(userId) {
+  const operations = new Set(
+    sessionOperations.values()
+  );
+
+  const pending =
+    pendingDeployOperationsByUser.get(userId);
+
+  if (pending) {
+    operations.add(pending);
+  }
+
+  return Array.from(operations)
+    .filter((operation) => operation.userId === userId)
+    .flatMap((operation) => operation.logs)
+    .sort(
+      (left, right) =>
+        new Date(left.timestamp).getTime() -
+        new Date(right.timestamp).getTime()
+    );
+}
 
 const sessionState = {
   active: false,
@@ -191,6 +328,46 @@ const ttlDestroyTimers = new Map();
 const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
   5 * 60 * 1000;
 const PROXY_COOKIE_NAME = 'privalyse_launch_token';
+
+// Les destructions Terraform sont sérialisées globalement.
+// Les déploiements peuvent rester parallèles, mais deux `terraform destroy`
+// ne sont jamais exécutés en même temps. C'est volontairement conservateur
+// pour supprimer tout risque de croisement pendant le durcissement multi-session.
+let destroyExecutionTail = Promise.resolve();
+let destroyExecutionQueueDepth = 0;
+
+async function withSerializedDestroy(
+  sessionId,
+  callback
+) {
+  const previousExecution = destroyExecutionTail;
+  let releaseExecution;
+
+  destroyExecutionTail = new Promise((resolve) => {
+    releaseExecution = resolve;
+  });
+
+  destroyExecutionQueueDepth += 1;
+
+  if (destroyExecutionQueueDepth > 1) {
+    pushLog(
+      `Destruction de la session ${sessionId} mise en file d attente de securite.`,
+      'info'
+    );
+  }
+
+  await previousExecution;
+
+  try {
+    return await callback();
+  } finally {
+    destroyExecutionQueueDepth = Math.max(
+      0,
+      destroyExecutionQueueDepth - 1
+    );
+    releaseExecution();
+  }
+}
 
 const AI_PULL_MAP = {
   'qwen-mini': 'qwen2.5:0.5b',
@@ -263,27 +440,26 @@ async function requireSessionAccess(
   next
 ) {
   try {
-    let sessionId =
+    const sessionId = String(
       req.body?.sessionId ||
       req.params?.sessionId ||
       req.query?.sessionId ||
-      null;
+      ''
+    ).trim();
 
-    if (!sessionId) {
-      const accessibleSessions =
-        await sessionRepository.listSessionsForUser(
-          req.auth.userId,
-          req.auth.tenantId,
-          false
-        );
-
-      sessionId = accessibleSessions[0]?.id || null;
-    }
-
+    // Fail-closed : aucune route de session ne doit choisir
+    // implicitement la première session accessible.
     if (!sessionId) {
       return res.status(400).json({
         ok: false,
         error: 'Identifiant de session manquant'
+      });
+    }
+
+    if (!isUuid(sessionId)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Identifiant de session invalide'
       });
     }
 
@@ -303,6 +479,68 @@ async function requireSessionAccess(
 
     req.sessionId = sessionId;
     next();
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error:
+        'Impossible de verifier l acces a la session'
+    });
+  }
+}
+
+/**
+ * Variante fail-closed réservée aux actions destructives.
+ *
+ * Contrairement à requireSessionAccess, aucun fallback n'est autorisé :
+ * l'identifiant de session doit être fourni explicitement dans le body.
+ */
+async function requireExplicitDestroySessionAccess(
+  req,
+  res,
+  next
+) {
+  const sessionId =
+    typeof req.body?.sessionId === 'string'
+      ? req.body.sessionId.trim()
+      : '';
+
+  if (!sessionId) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'Identifiant de session obligatoire pour la destruction'
+    });
+  }
+
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      sessionId
+    )
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'Identifiant de session invalide pour la destruction'
+    });
+  }
+
+  try {
+    const allowed =
+      await sessionRepository.canUserAccessSession(
+        sessionId,
+        req.auth.userId,
+        req.auth.tenantId
+      );
+
+    if (!allowed) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Acces refuse a cette session'
+      });
+    }
+
+    req.sessionId = sessionId;
+    return next();
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -460,16 +698,33 @@ function assertHeaderName(value, fieldName) {
   return trimmed;
 }
 
-function pushLog(message, type = 'info') {
+function pushLog(
+  message,
+  type = 'info',
+  operationOverride = null
+) {
+  const operation =
+    operationOverride || getCurrentOperation();
+
   const log = {
     message,
     type,
     timestamp: new Date().toISOString(),
-    sessionId: currentOperation.sessionId || null,
-    userId: currentOperation.userId || null,
+    sessionId: operation?.sessionId || null,
+    userId: operation?.userId || null,
   };
 
-  currentOperation.logs.push(log);
+  if (operation) {
+    operation.logs.push(log);
+
+    // Evite une croissance mémoire illimitée sur les opérations longues.
+    if (operation.logs.length > 1000) {
+      operation.logs.splice(
+        0,
+        operation.logs.length - 1000
+      );
+    }
+  }
 
   // Les logs d'une création/destruction ne sont envoyés qu'au compte
   // qui a déclenché l'opération. Les logs de maintenance sans userId
@@ -606,69 +861,115 @@ async function destroyInfraInternal(
   sessionId,
   reason = 'manual'
 ) {
-  currentOperation.type = 'destroy';
-  currentOperation.status = 'running';
-  currentOperation.phase = 'terraform';
-  currentOperation.cancelReadiness = false;
-  currentOperation.sessionId = sessionId;
-  currentOperation.logs = [];
+  let operation = getCurrentOperation();
+
+  if (!operation) {
+    operation = createOperation({
+      type: 'destroy',
+      sessionId,
+    });
+    bindOperationToSession(operation, sessionId);
+  }
+
+  operation.type = 'destroy';
+  operation.status = 'running';
+  operation.phase = 'terraform';
+  operation.cancelReadiness = false;
+  operation.sessionId = sessionId;
+  operation.logs = [];
 
   pushLog(
     `Destruction complete demandee pour la session ${sessionId} (${reason})`,
-    'info'
+    'info',
+    operation
   );
 
   let destroySucceeded = false;
 
   try {
-    const databaseSession =
-      await sessionRepository.getSessionById(
-        sessionId
-      );
+    await withSerializedDestroy(
+      sessionId,
+      async () => {
+        // Relire la session une fois le verrou de destruction obtenu.
+        // Cela évite de valider une cible puis d'attendre pendant qu'un autre
+        // destroy modifie l'état global.
+        const databaseSession =
+          await sessionRepository.getSessionById(
+            sessionId
+          );
 
-    if (!databaseSession) {
-      throw new Error('Session introuvable.');
-    }
+        if (!databaseSession) {
+          throw new Error('Session introuvable.');
+        }
 
-    if (databaseSession.status === 'destroyed') {
-      throw new Error(
-        'Cette session est deja detruite.'
-      );
-    }
+        if (databaseSession.status === 'destroyed') {
+          throw new Error(
+            'Cette session est deja detruite.'
+          );
+        }
 
-    if (!databaseSession.terraform_directory) {
-      throw new Error(
-        'Dossier Terraform introuvable pour cette session.'
-      );
-    }
+        const destroyTarget =
+          validateDestroyTargetAgainstDatabase(
+            databaseSession
+          );
 
-    await runTerraform(
-      [
-        'destroy',
-        '-auto-approve'
-      ],
-      {
-       TF_VAR_allowed_cidr:
-       config.workspace.allowedCidr ||
-       '127.0.0.1/32',
+        await runTerraform(
+          [
+            'destroy',
+            '-auto-approve'
+          ],
+          {
+            TF_VAR_allowed_cidr:
+              config.workspace.allowedCidr ||
+              '127.0.0.1/32',
 
-       TF_VAR_webui_secret_key:
-       crypto.randomBytes(48).toString('hex')
-      },
-      databaseSession.terraform_directory
+            TF_VAR_webui_secret_key:
+              crypto.randomBytes(48).toString('hex')
+          },
+          destroyTarget.workingDirectory
+        );
+
+        const destroyedSession =
+          await sessionRepository.markSessionDestroyed(
+            sessionId
+          );
+
+        if (!destroyedSession) {
+          throw new Error(
+            'Infrastructure detruite mais mise a jour PostgreSQL impossible.'
+          );
+        }
+
+        destroySucceeded = true;
+      }
     );
-
-    await sessionRepository.markSessionDestroyed(
-      sessionId
-    );
-
-    destroySucceeded = true;
-  } finally {
+ } finally {
+  if (destroySucceeded) {
     clearScheduledDestroy(sessionId);
+    clearSessionSecrets(sessionId);
 
-    if (destroySucceeded) {
-      clearSessionSecrets(sessionId);
-    }
+    try {
+  const removed =
+    removeSessionTerraformDirectory(sessionId);
+
+  if (removed) {
+    pushLog(
+      `Dossier Terraform local supprime pour ${sessionId}.`,
+      'success',
+      operation
+    );
+  }
+
+  await sessionRepository.clearDestroyedSessionInfrastructureMetadata(
+    sessionId
+  );
+} catch (cleanupError) {
+  pushLog(
+    `Infrastructure detruite mais nettoyage local incomplet: ${cleanupError.message}`,
+    'error',
+    operation
+  );
+}
 
     if (
       sessionState.databaseSessionId === sessionId
@@ -677,77 +978,115 @@ async function destroyInfraInternal(
       clearSessionLikeState(draftSessionState);
     }
 
-    if (destroySucceeded) {
-      persistState();
-    }
-
-    currentOperation.status =
-      destroySucceeded ? 'success' : 'error';
-    currentOperation.phase = 'idle';
-    currentOperation.type =
-      destroySucceeded ? 'idle' : currentOperation.type;
+    persistState();
   }
+
+  operation.status =
+    destroySucceeded ? 'success' : 'error';
+
+  operation.phase = 'idle';
+
+  operation.type =
+    destroySucceeded ? 'idle' : operation.type;
+}
 }
 
 function scheduleDestroyFromTtl(
   sessionId,
-  hours
+  expiresAt
 ) {
   clearScheduledDestroy(sessionId);
 
-  const ttlMs = hours * 60 * 60 * 1000;
+  const expiresMs = new Date(expiresAt).getTime();
+
+  if (!Number.isFinite(expiresMs)) {
+    pushLog(
+      `TTL non programme pour ${sessionId}: date d'expiration invalide.`,
+      'error'
+    );
+    return;
+  }
+
+  // Le timer est calculé depuis la vraie date expires_at PostgreSQL.
+  // Pour les nouvelles sessions, expires_at est recalculé au premier ready
+  // afin que l'utilisateur bénéficie réellement de 1h / 2h / 3h d'usage.
+  const remainingMs = Math.max(
+    0,
+    expiresMs - Date.now()
+  );
 
   const runDestroy = async () => {
-    // Terraform reste sérialisé dans ce MVP. Si une autre opération tourne,
-    // on décale ce TTL d'une minute au lieu de perdre définitivement le timer.
-    if (currentOperation.status === 'running') {
+    // Une opération active sur CETTE session repousse seulement sa destruction.
+    if (getRunningOperationForSession(sessionId)) {
       const retryTimer = setTimeout(
         runDestroy,
         60 * 1000
       );
-      ttlDestroyTimers.set(sessionId, retryTimer);
+
+      ttlDestroyTimers.set(
+        sessionId,
+        retryTimer
+      );
+
       return;
     }
 
-    currentOperation.sessionId = sessionId;
-    currentOperation.userId = null;
-    currentOperation.tenantId = null;
+    const operation = createOperation({
+      type: 'destroy',
+      sessionId,
+      userId: null,
+      tenantId: null,
+    });
 
-    pushLog(
-      `TTL atteint (${hours}h). Lancement de la destruction automatique de la session ${sessionId}.`,
-      'info'
+    bindOperationToSession(
+      operation,
+      sessionId
     );
 
-    try {
-      await destroySessionInternal(
-        sessionId,
-        'ttl'
-      );
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
-      persistState();
-    }
+    await operationContext.run(
+      operation,
+      async () => {
+        pushLog(
+          `Expiration atteinte. Lancement de la destruction automatique de la session ${sessionId}.`,
+          'info'
+        );
+
+        try {
+          await destroySessionInternal(
+            sessionId,
+            'ttl'
+          );
+        } catch (error) {
+          operation.status = 'error';
+          operation.phase = 'idle';
+          operation.cancelReadiness = false;
+
+          pushLog(
+            `Echec de la destruction TTL de la session ${sessionId} : ${error.message}`,
+            'error'
+          );
+
+          persistState();
+        }
+      }
+    );
   };
 
-  const timer = setTimeout(runDestroy, ttlMs);
-  ttlDestroyTimers.set(sessionId, timer);
+  const timer = setTimeout(
+    runDestroy,
+    remainingMs
+  );
+
+  ttlDestroyTimers.set(
+    sessionId,
+    timer
+  );
 }
 /**
  * Détruit les infrastructures associées aux sessions
  * PostgreSQL dont la date d'expiration est dépassée.
  */
 async function cleanupExpiredSessions() {
-  if (currentOperation.status === 'running') {
-    pushLog(
-      'Nettoyage des sessions expirées reporté : une opération est déjà en cours.',
-      'info'
-    );
-
-    return;
-  }
-
   const expiredSessions =
     await sessionRepository.listExpiredSessions(10);
 
@@ -761,39 +1100,82 @@ async function cleanupExpiredSessions() {
   );
 
   for (const expiredSession of expiredSessions) {
-    if (currentOperation.status === 'running') {
-      break;
+    // Un deploy/destroy actif ne bloque que sa propre session.
+    if (
+      getRunningOperationForSession(
+        expiredSession.id
+      )
+    ) {
+      continue;
     }
 
-    try {
-      currentOperation.sessionId = expiredSession.id;
-      currentOperation.userId = null;
-      currentOperation.tenantId = null;
+    const operation = createOperation({
+      type: 'destroy',
+      sessionId: expiredSession.id,
+      userId: null,
+      tenantId: null,
+    });
 
-      pushLog(
-        `Destruction automatique de la session expirée ${expiredSession.id}.`,
-        'info'
-      );
+    bindOperationToSession(
+      operation,
+      expiredSession.id
+    );
 
-      await destroySessionInternal(
-        expiredSession.id,
-        'expired-cleanup'
-      );
+    await operationContext.run(
+      operation,
+      async () => {
+        try {
+          pushLog(
+            `Destruction automatique de la session expirée ${expiredSession.id}.`,
+            'info'
+          );
 
-      pushLog(
-        `Session expirée ${expiredSession.id} détruite.`,
-        'success'
-      );
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
+          await destroySessionInternal(
+            expiredSession.id,
+            'expired-cleanup'
+          );
 
-      pushLog(
-        `Impossible de détruire la session expirée ${expiredSession.id} : ${error.message}`,
-        'error'
-      );
-    }
+          pushLog(
+            `Session expirée ${expiredSession.id} détruite.`,
+            'success'
+          );
+        } catch (error) {
+          operation.status = 'error';
+          operation.phase = 'idle';
+          operation.cancelReadiness = false;
+
+          pushLog(
+            `Impossible de détruire la session expirée ${expiredSession.id} : ${error.message}`,
+            'error'
+          );
+        }
+      }
+    );
+  }
+}
+async function restoreScheduledDestroysFromDatabase() {
+  const sessions =
+    await sessionRepository.listFutureExpiringSessions(1000);
+
+  for (const session of sessions) {
+    scheduleDestroyFromTtl(
+      session.id,
+      session.expires_at
+    );
+
+    pushLog(
+      `Timer TTL restaure pour ${session.id}, expiration ${new Date(
+        session.expires_at
+      ).toISOString()}.`,
+      'info'
+    );
+  }
+
+  if (sessions.length > 0) {
+    pushLog(
+      `${sessions.length} timer(s) TTL restaure(s) depuis PostgreSQL.`,
+      'success'
+    );
   }
 }
 function restorePersistedSession() {
@@ -807,6 +1189,7 @@ app.get(
   '/api/stream',
   authMiddleware.authenticate,
   authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
   (req, res) => {
     if (
       ADMIN_TOKEN_ENABLED &&
@@ -821,12 +1204,13 @@ app.get(
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-
-    currentOperation.logs
-      .filter((log) => log.userId === req.auth.userId)
-      .forEach((log) => {
-        res.write(`data: ${JSON.stringify(log)}\n\n`);
-      });
+    res.flushHeaders?.();
+    res.write(': connected\n\n');
+    getReplayLogsForUser(
+      req.auth.userId
+    ).forEach((log) => {
+      res.write(`data: ${JSON.stringify(log)}\n\n`);
+    });
 
     const client = {
       res,
@@ -857,8 +1241,42 @@ app.get(
           false
         );
 
-      const databaseSession =
-        accessibleSessions[0] || null;
+      const ownedActiveSessions =
+        accessibleSessions.filter(
+          (item) =>
+            item.created_by_user_id === req.auth.userId
+        );
+
+      const requestedSessionId =
+        typeof req.query?.sessionId === 'string'
+          ? req.query.sessionId.trim()
+          : '';
+
+      if (requestedSessionId && !isUuid(requestedSessionId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de session invalide'
+        });
+      }
+
+      let databaseSession = null;
+
+      if (requestedSessionId) {
+        databaseSession =
+          accessibleSessions.find(
+            (item) => item.id === requestedSessionId
+          ) || null;
+
+        if (!databaseSession) {
+          return res.status(403).json({
+            ok: false,
+            error: 'Acces refuse a cette session'
+          });
+        }
+      } else if (accessibleSessions.length === 1) {
+        // Sélection automatique uniquement lorsqu'il n'existe aucune ambiguïté.
+        databaseSession = accessibleSessions[0];
+      }
 
       let session = null;
 
@@ -884,12 +1302,17 @@ app.get(
           authMode:
             secrets?.authMode || 'local_admin',
           sessionMode:
-            memberCount > 1
+            databaseSession.session_mode === 'team'
               ? 'team'
               : 'individual',
           teamSizeHint: memberCount,
           createdAt: databaseSession.created_at,
-          expiresAt: databaseSession.expires_at,
+          readyAt: databaseSession.ready_at,
+          sessionTtlHours: databaseSession.session_ttl_hours,
+          expiresAt:
+            databaseSession.status === 'ready'
+              ? databaseSession.expires_at
+              : null,
           autoOpenAvailable:
             databaseSession.status === 'ready' &&
             Boolean(
@@ -904,35 +1327,47 @@ app.get(
         };
       }
 
-      const operationVisible =
-        currentOperation.userId === req.auth.userId ||
-        (
-          session &&
-          currentOperation.sessionId ===
-            session.databaseSessionId
+      const visibleOperation =
+        getVisibleOperationForUser(
+          req.auth.userId,
+          accessibleSessions
         );
 
       return res.json({
         ok: true,
         session,
         draftSession: null,
+        selectionRequired:
+          !databaseSession && accessibleSessions.length > 1,
+        selectedSessionId:
+          databaseSession?.id || null,
+        canCreateSession:
+          ownedActiveSessions.length === 0,
+        ownedActiveSessionIds:
+          ownedActiveSessions.map((item) => item.id),
         sessions: accessibleSessions.map((item) => ({
           id: item.id,
           name: item.name,
           status: item.status,
-          expiresAt: item.expires_at,
+          expiresAt:
+            item.status === 'ready'
+              ? item.expires_at
+              : null,
+          sessionTtlHours: item.session_ttl_hours,
           sessionMode:
-            Number(item.member_count || 1) > 1
+            item.session_mode === 'team'
               ? 'team'
               : 'individual',
           memberCount: Number(item.member_count || 1),
+          isOwner:
+            item.created_by_user_id === req.auth.userId,
         })),
-        operation: operationVisible
+        operation: visibleOperation
           ? {
-              type: currentOperation.type,
-              status: currentOperation.status,
-              phase: currentOperation.phase,
-              sessionId: currentOperation.sessionId,
+              type: visibleOperation.type,
+              status: visibleOperation.status,
+              phase: visibleOperation.phase,
+              sessionId: visibleOperation.sessionId,
             }
           : {
               type: 'idle',
@@ -1053,6 +1488,344 @@ function getSessionTerraformDirectory(sessionId) {
     sessionsRootDirectory,
     normalizedSessionId
   );
+}
+
+function getTerraformSessionsRootDirectory() {
+  return path.resolve(
+    __dirname,
+    'terraform-sessions'
+  );
+}
+function removeSessionTerraformDirectory(
+  sessionId,
+  explicitWorkingDirectory = null
+) {
+  const sessionsRootDirectory =
+    getTerraformSessionsRootDirectory();
+
+  const expectedDirectory = path.resolve(
+    getSessionTerraformDirectory(sessionId)
+  );
+
+  if (
+    explicitWorkingDirectory &&
+    path.resolve(String(explicitWorkingDirectory)) !== expectedDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: dossier incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (
+    path.dirname(expectedDirectory) !== sessionsRootDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: chemin hors de terraform-sessions pour ${sessionId}.`
+    );
+  }
+
+  if (!fs.existsSync(expectedDirectory)) {
+    return false;
+  }
+
+  const stats = fs.lstatSync(expectedDirectory);
+
+  if (
+    stats.isSymbolicLink() ||
+    !stats.isDirectory()
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: dossier non fiable pour ${sessionId}.`
+    );
+  }
+
+  const realRootDirectory =
+    fs.realpathSync(sessionsRootDirectory);
+
+  const realSessionDirectory =
+    fs.realpathSync(expectedDirectory);
+
+  const expectedRealDirectory =
+    path.join(realRootDirectory, String(sessionId));
+
+  if (
+    realSessionDirectory !== expectedRealDirectory
+  ) {
+    throw new Error(
+      `Nettoyage Terraform refuse: chemin reel inattendu pour ${sessionId}.`
+    );
+  }
+
+  fs.rmSync(realSessionDirectory, {
+    recursive: true,
+    force: false,
+  });
+
+  return true;
+}
+function assertSafeTerraformStateLocation(
+  databaseSession,
+  explicitWorkingDirectory = null
+) {
+  if (!databaseSession?.id) {
+    throw new Error(
+      'Protection destruction: session PostgreSQL invalide.'
+    );
+  }
+
+  const sessionId = String(databaseSession.id).trim();
+
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      sessionId
+    )
+  ) {
+    throw new Error(
+      'Protection destruction: UUID de session invalide.'
+    );
+  }
+
+  if (!databaseSession.terraform_directory) {
+    throw new Error(
+      'Protection destruction: dossier Terraform absent en PostgreSQL.'
+    );
+  }
+
+  const sessionsRootDirectory =
+    getTerraformSessionsRootDirectory();
+
+  const expectedDirectory = path.resolve(
+    getSessionTerraformDirectory(sessionId)
+  );
+
+  const databaseDirectory = path.resolve(
+    String(databaseSession.terraform_directory)
+  );
+
+  if (databaseDirectory !== expectedDirectory) {
+    throw new Error(
+      `Protection destruction: dossier Terraform incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (
+    explicitWorkingDirectory &&
+    path.resolve(String(explicitWorkingDirectory)) !== expectedDirectory
+  ) {
+    throw new Error(
+      `Protection destruction: dossier Terraform d execution incoherent pour ${sessionId}.`
+    );
+  }
+
+  if (path.dirname(expectedDirectory) !== sessionsRootDirectory) {
+    throw new Error(
+      `Protection destruction: le dossier de ${sessionId} sort de terraform-sessions.`
+    );
+  }
+
+  if (!fs.existsSync(sessionsRootDirectory)) {
+    throw new Error(
+      'Protection destruction: racine terraform-sessions introuvable.'
+    );
+  }
+
+  if (!fs.existsSync(expectedDirectory)) {
+    throw new Error(
+      `Protection destruction: dossier Terraform introuvable pour ${sessionId}.`
+    );
+  }
+
+  const directoryStats = fs.lstatSync(
+    expectedDirectory
+  );
+
+  if (
+    directoryStats.isSymbolicLink() ||
+    !directoryStats.isDirectory()
+  ) {
+    throw new Error(
+      `Protection destruction: dossier Terraform non fiable pour ${sessionId}.`
+    );
+  }
+
+  const realRootDirectory = fs.realpathSync(
+    sessionsRootDirectory
+  );
+
+  const realSessionDirectory = fs.realpathSync(
+    expectedDirectory
+  );
+
+  const expectedRealDirectory = path.join(
+    realRootDirectory,
+    sessionId
+  );
+
+  if (realSessionDirectory !== expectedRealDirectory) {
+    throw new Error(
+      `Protection destruction: chemin reel inattendu pour ${sessionId}.`
+    );
+  }
+
+  const statePath = path.join(
+    realSessionDirectory,
+    'terraform.tfstate'
+  );
+
+  if (!fs.existsSync(statePath)) {
+    throw new Error(
+      `Protection destruction: terraform.tfstate absent pour ${sessionId}.`
+    );
+  }
+
+  const stateStats = fs.lstatSync(statePath);
+
+  if (
+    stateStats.isSymbolicLink() ||
+    !stateStats.isFile() ||
+    stateStats.size <= 0
+  ) {
+    throw new Error(
+      `Protection destruction: terraform.tfstate invalide pour ${sessionId}.`
+    );
+  }
+
+  return {
+    sessionId,
+    workingDirectory: realSessionDirectory,
+    statePath,
+  };
+}
+
+function readTerraformInstanceIdForDestroy(
+  workingDirectory,
+  sessionId
+) {
+  const output = terraformOutputRaw(
+    'instance_id',
+    workingDirectory
+  );
+
+  const outputError = output?.error
+    ? String(output.error.message || output.error)
+    : '';
+
+  const stderr = String(output?.stderr || '').trim();
+
+  if (
+    outputError ||
+    output?.status !== 0
+  ) {
+    const detail = (outputError || stderr || 'output Terraform indisponible')
+      .replace(/\s+/g, ' ')
+      .slice(0, 240);
+
+    throw new Error(
+      `Protection destruction: impossible de lire instance_id dans le state de ${sessionId} (${detail}).`
+    );
+  }
+
+  const instanceId = String(
+    output.stdout || ''
+  ).trim();
+
+  if (!instanceId) {
+    throw new Error(
+      `Protection destruction: instance_id vide dans le state de ${sessionId}.`
+    );
+  }
+
+  return instanceId;
+}
+
+function validateDestroyTargetAgainstDatabase(
+  databaseSession,
+  explicitWorkingDirectory = null
+) {
+  const safeLocation =
+    assertSafeTerraformStateLocation(
+      databaseSession,
+      explicitWorkingDirectory
+    );
+
+  const databaseInstanceId = String(
+    databaseSession.instance_id || ''
+  ).trim();
+
+  if (!databaseInstanceId) {
+    throw new Error(
+      `Protection destruction: instance_id PostgreSQL absent pour ${safeLocation.sessionId}.`
+    );
+  }
+
+  const stateInstanceId =
+    readTerraformInstanceIdForDestroy(
+      safeLocation.workingDirectory,
+      safeLocation.sessionId
+    );
+
+  if (stateInstanceId !== databaseInstanceId) {
+    throw new Error(
+      `Protection destruction: instance_id incoherent pour ${safeLocation.sessionId}; destruction refusee.`
+    );
+  }
+
+  pushLog(
+    `Cible destruction validee: session=${safeLocation.sessionId}, ` +
+      `dossier=${safeLocation.workingDirectory}, ` +
+      `instance_db=${databaseInstanceId}, ` +
+      `instance_state=${stateInstanceId}.`,
+    'success'
+  );
+
+  return {
+    ...safeLocation,
+    databaseInstanceId,
+    stateInstanceId,
+  };
+}
+
+function validateFailedDeployCleanupTarget(
+  databaseSession,
+  explicitWorkingDirectory
+) {
+  const safeLocation =
+    assertSafeTerraformStateLocation(
+      databaseSession,
+      explicitWorkingDirectory
+    );
+
+  const stateInstanceId =
+    readTerraformInstanceIdForDestroy(
+      safeLocation.workingDirectory,
+      safeLocation.sessionId
+    );
+
+  const databaseInstanceId = String(
+    databaseSession.instance_id || ''
+  ).trim();
+
+  if (
+    databaseInstanceId &&
+    databaseInstanceId !== stateInstanceId
+  ) {
+    throw new Error(
+      `Protection nettoyage: instance_id incoherent pour ${safeLocation.sessionId}.`
+    );
+  }
+
+  pushLog(
+    `Cible nettoyage partiel validee: session=${safeLocation.sessionId}, ` +
+      `dossier=${safeLocation.workingDirectory}, ` +
+      `instance_state=${stateInstanceId}.`,
+    'success'
+  );
+
+  return {
+    ...safeLocation,
+    databaseInstanceId: databaseInstanceId || null,
+    stateInstanceId,
+  };
 }
 
 /**
@@ -1186,12 +1959,15 @@ function runTerraform(
   extraEnvironment = {},
   workingDirectory = TERRAFORM_DIR
 ) {
+  const operation = getCurrentOperation();
+
   return terraformService.runTerraform(
     argumentsList,
     {
       workingDirectory,
       extraEnvironment,
-      onLog: pushLog,
+      onLog: (message, type = 'info') =>
+        pushLog(message, type, operation),
     }
   );
 }
@@ -1200,17 +1976,22 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForOperationToLeaveRunning(timeoutMs = 30000) {
+async function waitForOperationToLeaveRunning(
+  operation,
+  timeoutMs = 30000
+) {
+  if (!operation) return true;
+
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (currentOperation.status !== 'running') {
+    if (operation.status !== 'running') {
       return true;
     }
     await sleep(200);
   }
 
-  return currentOperation.status !== 'running';
+  return operation.status !== 'running';
 }
 
 function checkHttpStatus(url, acceptedStatuses = [200]) {
@@ -1306,13 +2087,8 @@ async function getOpenWebUiBaseUrl(sessionId) {
   }
 }
 
-function getProxyBaseUrl(req = null) {
-  if (config.proxyBaseUrl) {
-    return config.proxyBaseUrl;
-  }
-
-  const host = req?.hostname || 'localhost';
-  return `http://${host}:${PROXY_PORT}`;
+function getProxyBaseUrl() {
+  return config.proxyBaseUrl;
 }
 
 function getCookieValue(req, name) {
@@ -1568,7 +2344,7 @@ async function resolveAuthorizedProxyContext(
     new Date(launchEntry.expiresAt).getTime() <= Date.now()
   ) {
     throw createProxyAccessError(
-      'Ouverture automatique invalide. Reviens dans Privalyse.',
+      'Ouverture automatique invalide. Reviens dans Prydena.',
       403
     );
   }
@@ -1947,6 +2723,8 @@ async function waitForIaReady(
   ip,
   expectedModel = null
 ) {
+  const operation = getCurrentOperation();
+
   const openWebUiUrl =
     `http://${ip}:3000/`;
 
@@ -1971,7 +2749,7 @@ async function waitForIaReady(
     attempt <= maxAttempts;
     attempt += 1
   ) {
-    if (currentOperation.cancelReadiness) {
+    if (operation?.cancelReadiness) {
       pushLog(
         'Attente readiness interrompue a la demande utilisateur',
         'info'
@@ -2026,7 +2804,7 @@ async function waitForIaReady(
         waited += sliceMs
       ) {
         if (
-          currentOperation.cancelReadiness
+          operation?.cancelReadiness
         ) {
           pushLog(
             'Attente readiness interrompue a la demande utilisateur',
@@ -2050,7 +2828,7 @@ async function waitForIaReady(
   }
 
   pushLog(
-    `Workspace Privalyse indisponible apres environ ${totalMinutes} minutes`,
+    `Workspace Prydena indisponible apres environ ${totalMinutes} minutes`,
     'error'
   );
 
@@ -2120,15 +2898,65 @@ const owuiPassword =
 const teamSizeHint =
   sessionMode === 'team' ? 3 : 1;
 
-if (currentOperation.status === 'running') {
+const existingDeployOperation =
+  getRunningDeployForUser(req.auth.userId);
+
+if (existingDeployOperation) {
   return res.status(409).json({
     ok: false,
-    error: `Operation ${currentOperation.type} deja en cours`
+    error:
+      'Un deploiement est deja en cours pour votre compte'
   });
 }
 
-let groupMembers = [];
-let selectedGroup = null;
+const deployOperation = createOperation({
+  type: 'deploy',
+  userId: req.auth.userId,
+  tenantId: req.auth.tenantId,
+});
+
+pendingDeployOperationsByUser.set(
+  req.auth.userId,
+  deployOperation
+);
+
+return operationContext.run(
+  deployOperation,
+  async () => {
+    try {
+      /*
+       * Un compte ne peut posseder qu'une seule session non detruite.
+       * Les sessions partagees creees par d'autres utilisateurs restent
+       * accessibles et ne bloquent pas la creation d'une session personnelle.
+       *
+       * Ce controle est fait cote serveur : il reste donc actif meme si
+       * l'interface est contournee ou si deux onglets sont ouverts.
+       */
+      const existingSessions =
+        await sessionRepository.listSessionsForUser(
+          req.auth.userId,
+          req.auth.tenantId,
+          false
+        );
+
+      const ownedActiveSession =
+        existingSessions.find(
+          (item) =>
+            item.created_by_user_id === req.auth.userId
+        ) || null;
+
+      if (ownedActiveSession) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ACTIVE_SESSION_EXISTS',
+          sessionId: ownedActiveSession.id,
+          error:
+            'Une session est deja active pour votre compte. Detruisez-la avant d en creer une nouvelle.'
+        });
+      }
+
+      let groupMembers = [];
+      let selectedGroup = null;
 
 if (sessionMode === 'team') {
   selectedGroup =
@@ -2220,10 +3048,39 @@ if (!INSTANCE_TYPES.has(instanceType)) {
   }
 
   const finalSessionTtlHours = Number.parseInt(String(sessionTtlHours), 10);
-  if (!Number.isInteger(finalSessionTtlHours) || finalSessionTtlHours < 1 || finalSessionTtlHours > 168) {
-    return res.status(400).json({ ok: false, error: 'sessionTtlHours invalide' });
-  }
 
+if (
+  !Number.isInteger(finalSessionTtlHours) ||
+  ![1, 2, 3].includes(finalSessionTtlHours)
+) {
+  return res.status(400).json({
+    ok: false,
+    error: 'sessionTtlHours doit être égal à 1, 2 ou 3.'
+  });
+}
+const quotaStatus =
+  await usageRepository.getMonthlyQuotaStatus({
+    tenantId: req.auth.tenantId,
+    userId: req.auth.userId,
+    sessionMode,
+    groupId:
+      sessionMode === 'team'
+        ? selectedGroup.id
+        : null,
+    requestedHours: finalSessionTtlHours,
+  });
+
+if (!quotaStatus.allowed) {
+  return res.status(403).json({
+    ok: false,
+    code: 'MONTHLY_QUOTA_EXCEEDED',
+    error:
+      `Quota mensuel insuffisant. ` +
+      `Il reste ${quotaStatus.remainingHours.toFixed(2)} h, ` +
+      `mais la session demande ${finalSessionTtlHours} h.`,
+    quota: quotaStatus,
+  });
+}
   const finalTeamSizeHint = Number.parseInt(String(teamSizeHint), 10);
   if (!Number.isInteger(finalTeamSizeHint) || finalTeamSizeHint < 1 || finalTeamSizeHint > 200) {
     return res.status(400).json({ ok: false, error: 'teamSizeHint invalide' });
@@ -2299,7 +3156,10 @@ if (!INSTANCE_TYPES.has(instanceType)) {
     finalOwuiEmail
   );
 
-  const sessionExpiresAt = new Date(
+  // Garde-fou pendant le provisioning : si le backend redémarre ou si la
+  // préparation reste bloquée, la boucle de nettoyage conserve une échéance.
+  // Cette date sera remplacée au premier passage à ready par ready_at + TTL.
+  const provisioningSafetyExpiresAt = new Date(
     Date.now() +
       finalSessionTtlHours *
         60 *
@@ -2311,30 +3171,51 @@ if (!INSTANCE_TYPES.has(instanceType)) {
   let sessionTerraformDirectory = null;
 
   try {
-    currentOperation.type = 'deploy';
-    currentOperation.status = 'running';
-    currentOperation.phase = 'terraform';
-    currentOperation.cancelReadiness = false;
-    currentOperation.sessionId = null;
-    currentOperation.userId = req.auth.userId;
-    currentOperation.tenantId = req.auth.tenantId;
-    currentOperation.logs = [];
+    deployOperation.type = 'deploy';
+    deployOperation.status = 'running';
+    deployOperation.phase = 'terraform';
+    deployOperation.cancelReadiness = false;
+    deployOperation.logs = [];
 
-    databaseSession =
-    await sessionRepository.createSession({
-    tenantId: req.auth.tenantId,
-    createdByUserId: req.auth.userId,
-    name: finalWorkspaceName,
-    slug: finalWorkspaceSlug,
-    status: 'provisioning',
-    terraformDirectory: null,
-    expiresAt: sessionExpiresAt,
-    sessionMode,
-    groupId:
-      sessionMode === 'team'
-        ? groupId.trim()
-        : null,
-  });
+    try {
+      databaseSession =
+        await sessionRepository.createSession({
+          tenantId: req.auth.tenantId,
+          createdByUserId: req.auth.userId,
+          name: finalWorkspaceName,
+          slug: finalWorkspaceSlug,
+          status: 'provisioning',
+          terraformDirectory: null,
+          expiresAt: provisioningSafetyExpiresAt,
+          sessionTtlHours: finalSessionTtlHours,
+          sessionMode,
+          groupId:
+            sessionMode === 'team'
+              ? groupId.trim()
+              : null,
+        });
+    } catch (createSessionError) {
+      /*
+       * Dernière barrière contre une double création : la migration 009
+       * impose aussi l'unicité directement dans PostgreSQL. Ce cas peut
+       * arriver si deux requêtes concurrentes atteignent deux processus
+       * Node différents avant que le contrôle applicatif ne voie la session.
+       */
+      if (
+        createSessionError?.code === '23505' &&
+        createSessionError?.constraint ===
+          'sessions_one_active_per_creator_unique'
+      ) {
+        return res.status(409).json({
+          ok: false,
+          code: 'ACTIVE_SESSION_EXISTS',
+          error:
+            'Une session est deja active pour votre compte. Detruisez-la avant d en creer une nouvelle.'
+        });
+      }
+
+      throw createSessionError;
+    }
 
     await usageRepository.setBillingOwnerSnapshot(
       databaseSession.id,
@@ -2356,7 +3237,10 @@ if (!INSTANCE_TYPES.has(instanceType)) {
       req.auth.userId
     );
 
-    currentOperation.sessionId = databaseSession.id;
+    bindOperationToSession(
+      deployOperation,
+      databaseSession.id
+    );
    if (sessionMode === 'team') {
   for (const member of groupMembers) {
     await sessionRepository.addUserToSession(
@@ -2473,9 +3357,10 @@ pushLog(
         ? groupId.trim()
         : null;
     draftSessionState.createdAt = new Date().toISOString();
-    draftSessionState.expiresAt = new Date(
-      Date.now() + finalSessionTtlHours * 60 * 60 * 1000
-    ).toISOString();
+    // Le TTL utilisateur ne démarre qu'au premier passage à ready.
+    // La DB conserve un expires_at de sécurité pendant le provisioning,
+    // mais il n'est pas présenté comme temps d'utilisation.
+    draftSessionState.expiresAt = null;
     persistState();
 
     pushLog(
@@ -2588,7 +3473,7 @@ sessionState.groupId =
     ? groupId.trim()
     : null;
       sessionState.createdAt = new Date().toISOString();
-      sessionState.expiresAt = new Date(Date.now() + finalSessionTtlHours * 60 * 60 * 1000).toISOString();
+      sessionState.expiresAt = null;
       const sessionSecrets =
         getSessionSecretsForId(
           databaseSession.id,
@@ -2603,7 +3488,7 @@ sessionState.groupId =
       deleteLaunchTokensForSession(databaseSession.id);
       persistState();
 
-    currentOperation.phase = 'readiness';
+    deployOperation.phase = 'readiness';
 
 const readiness =
   await waitForIaReady(
@@ -2612,10 +3497,10 @@ const readiness =
   );
 
 if (readiness.cancelled) {
-  currentOperation.type = 'idle';
-  currentOperation.status = 'idle';
-  currentOperation.phase = 'idle';
-  currentOperation.cancelReadiness = false;
+  deployOperation.type = 'idle';
+  deployOperation.status = 'idle';
+  deployOperation.phase = 'idle';
+  deployOperation.cancelReadiness = false;
 
   pushLog(
     'Deploy interrompu pendant la readiness pour permettre une destruction',
@@ -2652,34 +3537,43 @@ if (finalAuthMode === 'trusted_header') {
   );
 }
 
-sessionState.status = 'ready';
-draftSessionState.status = 'ready';
-
-persistState();
-
 } else {
   throw new Error(
     'Impossible de recuperer instance_public_ip'
   );
 }
-    currentOperation.status = 'success';
-    currentOperation.phase = 'idle';
-    currentOperation.cancelReadiness = false;
-       if (databaseSession) {
-      await sessionRepository.updateSessionStatus(
-        databaseSession.id,
-        'ready'
-      );
-
-      await usageRepository.markReady(
+    if (databaseSession) {
+      databaseSession = await usageRepository.markReady(
         databaseSession.id
       );
+
+      if (!databaseSession || !databaseSession.expires_at) {
+        throw new Error(
+          'Session prête mais expiration TTL impossible à calculer.'
+        );
+      }
+
+      sessionState.status = 'ready';
+      draftSessionState.status = 'ready';
+      sessionState.expiresAt = databaseSession.expires_at;
+      draftSessionState.expiresAt = databaseSession.expires_at;
+      persistState();
+
+      pushLog(
+        `TTL utilisateur démarré à ready : ${finalSessionTtlHours}h, expiration ${new Date(databaseSession.expires_at).toISOString()}.`,
+        'success'
+      );
+
+      scheduleDestroyFromTtl(
+        databaseSession.id,
+        databaseSession.expires_at
+      );
     }
-    currentOperation.type = 'idle';
-    scheduleDestroyFromTtl(
-      databaseSession.id,
-      finalSessionTtlHours
-    );
+
+    deployOperation.status = 'success';
+    deployOperation.phase = 'idle';
+    deployOperation.cancelReadiness = false;
+    deployOperation.type = 'idle';
 
     return res.json({
       ok: true,
@@ -2690,9 +3584,9 @@ persistState();
     e && e.message ? e.message : e
   );
 
-  currentOperation.status = 'error';
-  currentOperation.phase = 'cleanup';
-  currentOperation.cancelReadiness = false;
+  deployOperation.status = 'error';
+  deployOperation.phase = 'cleanup';
+  deployOperation.cancelReadiness = false;
 
   pushLog(
     `Erreur deploy: ${message}`,
@@ -2713,23 +3607,51 @@ persistState();
     );
 
     try {
-      await runTerraform(
-        [
-          'destroy',
-          '-auto-approve',
-        ],
-        {
-          TF_VAR_allowed_cidr:
-            config.workspace.allowedCidr ||
-            '127.0.0.1/32',
+      if (!databaseSession) {
+        throw new Error(
+          'Protection nettoyage: session PostgreSQL introuvable.'
+        );
+      }
 
-          TF_VAR_webui_secret_key:
-            crypto.randomBytes(48).toString('hex'),
+      await withSerializedDestroy(
+        databaseSession.id,
+        async () => {
+          const cleanupTarget =
+            validateFailedDeployCleanupTarget(
+              databaseSession,
+              sessionTerraformDirectory
+            );
 
-          TF_VAR_owui_password:
-            crypto.randomBytes(24).toString('base64url'),
-        },
-        sessionTerraformDirectory
+          await runTerraform(
+            [
+              'destroy',
+              '-auto-approve',
+            ],
+            {
+              TF_VAR_allowed_cidr:
+                config.workspace.allowedCidr ||
+                '127.0.0.1/32',
+
+              TF_VAR_webui_secret_key:
+                crypto.randomBytes(48).toString('hex'),
+
+              TF_VAR_owui_password:
+                crypto.randomBytes(24).toString('base64url'),
+            },
+            cleanupTarget.workingDirectory
+          );
+
+          const destroyedSession =
+            await sessionRepository.markSessionDestroyed(
+              databaseSession.id
+            );
+
+          if (!destroyedSession) {
+            throw new Error(
+              'Infrastructure partielle detruite mais mise a jour PostgreSQL impossible.'
+            );
+          }
+        }
       );
 
       pushLog(
@@ -2737,30 +3659,22 @@ persistState();
         'success'
       );
 
-      if (databaseSession) {
-        await sessionRepository.markSessionDestroyed(
+      clearSessionSecrets(databaseSession.id);
+
+      if (
+        sessionState.databaseSessionId ===
           databaseSession.id
+      ) {
+        clearSessionLikeState(
+          sessionState
+        );
+
+        clearSessionLikeState(
+          draftSessionState
         );
       }
 
-      if (databaseSession) {
-        clearSessionSecrets(databaseSession.id);
-
-        if (
-          sessionState.databaseSessionId ===
-            databaseSession.id
-        ) {
-          clearSessionLikeState(
-            sessionState
-          );
-
-          clearSessionLikeState(
-            draftSessionState
-          );
-        }
-
-        persistState();
-      }
+      persistState();
     } catch (cleanupError) {
       pushLog(
         `Echec du nettoyage automatique: ${cleanupError.message}`,
@@ -2788,9 +3702,9 @@ persistState();
     }
   }
 
-  currentOperation.status = 'error';
-  currentOperation.phase = 'idle';
-  currentOperation.cancelReadiness = false;
+  deployOperation.status = 'error';
+  deployOperation.phase = 'idle';
+  deployOperation.cancelReadiness = false;
 
   if (
     /quota|limit exceeded|overlimit|flavor/i.test(
@@ -2816,6 +3730,19 @@ return res.status(500).json({
   error: message,
 });
   }
+    } finally {
+      if (
+        pendingDeployOperationsByUser.get(
+          req.auth.userId
+        ) === deployOperation
+      ) {
+        pendingDeployOperationsByUser.delete(
+          req.auth.userId
+        );
+      }
+    }
+  }
+);
 });
 
 app.post(
@@ -2823,27 +3750,31 @@ app.post(
 
   authMiddleware.authenticate,
   authMiddleware.requireAuthentication,
-  requireSessionAccess,
+  requireExplicitDestroySessionAccess,
 
   async (req, res) => {
     const sessionId = req.sessionId;
 
-    if (currentOperation.status === 'running') {
+    const runningOperation =
+      getRunningOperationForSession(sessionId);
+
+    if (runningOperation) {
       const canInterruptReadiness =
-        currentOperation.type === 'deploy' &&
-        currentOperation.phase === 'readiness' &&
-        currentOperation.sessionId === sessionId;
+        runningOperation.type === 'deploy' &&
+        runningOperation.phase === 'readiness';
 
       if (canInterruptReadiness) {
         pushLog(
           'Destruction demandee pendant les tentatives readiness, interruption en cours...',
-          'info'
+          'info',
+          runningOperation
         );
 
-        currentOperation.cancelReadiness = true;
+        runningOperation.cancelReadiness = true;
 
         const released =
           await waitForOperationToLeaveRunning(
+            runningOperation,
             30000
           );
 
@@ -2858,48 +3789,61 @@ app.post(
         return res.status(409).json({
           ok: false,
           error:
-            `Operation ${currentOperation.type} deja en cours`
+            `Operation ${runningOperation.type} deja en cours sur cette session`
         });
       }
     }
 
-    currentOperation.sessionId = sessionId;
-    currentOperation.userId = req.auth.userId;
-    currentOperation.tenantId = req.auth.tenantId;
+    const destroyOperation = createOperation({
+      type: 'destroy',
+      sessionId,
+      userId: req.auth.userId,
+      tenantId: req.auth.tenantId,
+    });
 
-    try {
-      await destroySessionInternal(
-        sessionId,
-        'manual'
-      );
+    bindOperationToSession(
+      destroyOperation,
+      sessionId
+    );
 
-      return res.json({
-        ok: true,
-        sessionId
-      });
-    } catch (error) {
-      currentOperation.status = 'error';
-      currentOperation.phase = 'idle';
-      currentOperation.cancelReadiness = false;
+    return operationContext.run(
+      destroyOperation,
+      async () => {
+        try {
+          await destroySessionInternal(
+            sessionId,
+            'manual'
+          );
 
-      pushLog(
-        `Erreur destroy: ${error.message}`,
-        'error'
-      );
+          return res.json({
+            ok: true,
+            sessionId
+          });
+        } catch (error) {
+          destroyOperation.status = 'error';
+          destroyOperation.phase = 'idle';
+          destroyOperation.cancelReadiness = false;
 
-      const statusCode =
-        error.message === 'Session introuvable.'
-          ? 404
-          : error.message ===
-              'Cette session est deja detruite.'
-            ? 409
-            : 500;
+          pushLog(
+            `Erreur destroy: ${error.message}`,
+            'error'
+          );
 
-      return res.status(statusCode).json({
-        ok: false,
-        error: error.message
-      });
-    }
+          const statusCode =
+            error.message === 'Session introuvable.'
+              ? 404
+              : error.message ===
+                  'Cette session est deja detruite.'
+                ? 409
+                : 500;
+
+          return res.status(statusCode).json({
+            ok: false,
+            error: error.message
+          });
+        }
+      }
+    );
   }
 );
 
@@ -2940,7 +3884,74 @@ app.get(
     }
   }
 );
+/**
+ * Retourne la consommation mensuelle et le quota
+ * pour l'utilisateur ou le groupe sélectionné.
+ */
+app.get(
+  '/api/usage/quota',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  async (req, res) => {
+    try {
+      const sessionMode =
+        req.query?.mode === 'team'
+          ? 'team'
+          : 'individual';
 
+      let groupId = null;
+
+      if (sessionMode === 'team') {
+        groupId = req.query?.groupId || null;
+
+        if (!groupId || !isUuid(groupId)) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Groupe invalide.',
+          });
+        }
+
+        const groups =
+          await groupRepository.listGroupsByUserId(
+            req.auth.tenantId,
+            req.auth.userId
+          );
+
+        const allowedGroup = groups.find(
+          (group) => group.id === groupId
+        );
+
+        if (!allowedGroup) {
+          return res.status(403).json({
+            ok: false,
+            error:
+              'Vous ne pouvez pas consulter le quota de ce groupe.',
+          });
+        }
+      }
+
+      const quota =
+        await usageRepository.getMonthlyQuotaStatus({
+          tenantId: req.auth.tenantId,
+          userId: req.auth.userId,
+          sessionMode,
+          groupId,
+          requestedHours: 0,
+        });
+
+      return res.json({
+        ok: true,
+        quota,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          `Impossible de charger la consommation : ${error.message}`,
+      });
+    }
+  }
+);
 /**
  * Liste tous les groupes du tenant pour l'administration.
  */
@@ -3157,7 +4168,88 @@ app.delete(
     }
   }
 );
+/**
+ * Modifie le quota mensuel d'un groupe.
+ * null = illimité.
+ */
+app.patch(
+  '/api/admin/groups/:groupId/quota',
+  authMiddleware.authenticate,
+  authMiddleware.requireAuthentication,
+  authMiddleware.requireRole('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const { groupId } = req.params;
 
+      if (!isUuid(groupId)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Identifiant de groupe invalide.',
+        });
+      }
+
+      const rawMonthlyQuotaHours =
+        req.body?.monthlyQuotaHours;
+
+      let monthlyQuotaHours = null;
+
+      if (
+        rawMonthlyQuotaHours !== null &&
+        rawMonthlyQuotaHours !== undefined &&
+        rawMonthlyQuotaHours !== ''
+      ) {
+        const parsedQuota =
+          Number(rawMonthlyQuotaHours);
+
+        if (
+          !Number.isInteger(parsedQuota) ||
+          parsedQuota < 0 ||
+          parsedQuota > 744
+        ) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              'Le quota mensuel doit être un entier entre 0 et 744 heures.',
+          });
+        }
+
+        monthlyQuotaHours = parsedQuota;
+      }
+
+      const group =
+        await groupRepository.updateMonthlyQuotaByIdAndTenantId({
+          groupId,
+          tenantId: req.auth.tenantId,
+          monthlyQuotaHours,
+        });
+
+      if (!group) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Groupe introuvable.',
+        });
+      }
+
+      return res.json({
+        ok: true,
+        group: {
+          id: group.id,
+          name: group.name,
+          monthlyQuotaHours:
+            group.monthly_quota_hours === null
+              ? null
+              : Number(group.monthly_quota_hours),
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          `Impossible de modifier le quota du groupe : ${error.message}`,
+      });
+    }
+  }
+);
 /**
  * Supprime un groupe et ses appartenances.
  */
@@ -3405,12 +4497,20 @@ const expiredSessionCleanupTimer = setInterval(
 
 expiredSessionCleanupTimer.unref();
 
-cleanupExpiredSessions().catch((error) => {
-  pushLog(
-    `Erreur du nettoyage initial : ${error.message}`,
-    'error'
-  );
-});
+(async () => {
+  try {
+    // 1. Les sessions déjà expirées sont détruites immédiatement.
+    await cleanupExpiredSessions();
+
+    // 2. Les sessions encore valides récupèrent leur timer exact.
+    await restoreScheduledDestroysFromDatabase();
+  } catch (error) {
+    pushLog(
+      `Erreur de restauration des TTL au démarrage : ${error.message}`,
+      'error'
+    );
+  }
+})();
 
 
 
