@@ -1,4 +1,4 @@
-﻿variable "project" {
+variable "project" {
   description = "Nom technique du projet Privalyse"
   type        = string
   default     = "privalyse"

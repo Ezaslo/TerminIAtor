@@ -4,28 +4,237 @@ on:
   push:
     branches:
       - main
-      - v1-session-autologin
+      - rattrapage/v2
 
   pull_request:
     branches:
       - main
+      - rattrapage/v2
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  terraform:
+  node:
+    name: Node.js checks and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Check Node.js and npm versions
+        working-directory: web
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run project checks
+        working-directory: web
+        run: npm run check
+
+      - name: Run automated tests
+        working-directory: web
+        run: npm test
+
+      - name: Run TOTP verification test
+        working-directory: web
+        run: node scripts/test-totp-verification.js
+
+  terraform:
+    name: Terraform validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
 
       - name: Terraform Format Check
-        run: terraform fmt -check
+        working-directory: web/terraform
+        run: terraform fmt -check -recursive -no-color
 
       - name: Terraform Init
-        run: terraform init -backend=false
+        working-directory: web/terraform
+        run: terraform init -backend=false -input=false -no-color
 
       - name: Terraform Validate
-        run: terraform validate
+        working-directory: web/terraform
+        run: terraform validate -no-color
+
+  docker-build:
+    name: Docker build validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build Docker image
+        run: docker build --file Dockerfile --tag terminiator-ci:${{ github.sha }} web
+
+  compose-config:
+    name: Docker Compose configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate Docker Compose configuration
+        env:
+          POSTGRES_PASSWORD: ci-compose-password
+        run: |
+          trap 'rm -f .env' EXIT
+          cp .env.example .env
+          docker compose config --quiet
+
+  dependency-audit:
+    name: npm dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Fail on high or critical vulnerabilities
+        working-directory: web
+        run: npm audit --audit-level=high
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan repository with Gitleaks
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true
+
+  integration:
+    name: PostgreSQL integration and health checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: terminiator_ci
+          POSTGRES_USER: terminiator_ci
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U terminiator_ci -d terminiator_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      SESSION_PROXY_PORT: 3002
+      DATABASE_URL: postgresql://terminiator_ci:ci-only-password@127.0.0.1:5432/terminiator_ci
+      DATABASE_SSL: false
+      MFA_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Apply database migrations
+        working-directory: web
+        run: node src/database/migrate.js
+
+      - name: Start application
+        working-directory: web
+        run: |
+          node server.js > "$RUNNER_TEMP/terminiator-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/terminiator-server.pid"
+
+      - name: Check health endpoints
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --output /dev/null http://127.0.0.1:3001/health/live \
+              && curl --fail --silent --show-error --output /dev/null http://127.0.0.1:3001/health/ready; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Stop application
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/terminiator-server.pid"; then
+            kill "$(cat "$RUNNER_TEMP/terminiator-server.pid")" 2>/dev/null || true
+          fi

@@ -1,3 +1,4 @@
+services:
   postgres:
     image: postgres:17-bookworm
     container_name: privalyse-postgres
@@ -20,7 +21,7 @@
   privalyse:
     build:
       context: ./web
-      dockerfile: Dockerfile
+      dockerfile: ../Dockerfile
 
     image: privalyse:production
     container_name: privalyse-app
