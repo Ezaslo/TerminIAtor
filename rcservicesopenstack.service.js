@@ -1,0 +1,46 @@
+[35mserver.js[m[36m:[m[32m106[m[36m:[mapp.use('/api/auth/mfa/[1;31mrecover[my', mfaVerifyLimiter);
+[35mserver.js[m[36m:[m[32m862[m[36m:[masync function [1;31mdestroySession[mInternal(
+[35mserver.js[m[36m:[m[32m978[m[36m:[m} catch ([1;31mcleanup[mError) {
+[35mserver.js[m[36m:[m[32m980[m[36m:[m    `Infrastructure detruite mais nettoyage local incomplet: ${[1;31mcleanup[mError.message}`,
+[35mserver.js[m[36m:[m[32m1067[m[36m:[m          await [1;31mdestroySession[mInternal(
+[35mserver.js[m[36m:[m[32m1101[m[36m:[masync function [1;31mcleanup[mExpiredSessions() {
+[35mserver.js[m[36m:[m[32m1102[m[36m:[m  const [1;31mexpired[mSessions =
+[35mserver.js[m[36m:[m[32m1105[m[36m:[m  if ([1;31mexpired[mSessions.length === 0) {
+[35mserver.js[m[36m:[m[32m1110[m[36m:[m    `${[1;31mexpired[mSessions.length} session(s) expirée(s) détectée(s).`,
+[35mserver.js[m[36m:[m[32m1114[m[36m:[m  for (const [1;31mexpired[mSession of [1;31mexpired[mSessions) {
+[35mserver.js[m[36m:[m[32m1118[m[36m:[m        [1;31mexpired[mSession.id
+[35mserver.js[m[36m:[m[32m1126[m[36m:[m      sessionId: [1;31mexpired[mSession.id,
+[35mserver.js[m[36m:[m[32m1133[m[36m:[m      [1;31mexpired[mSession.id
+[35mserver.js[m[36m:[m[32m1141[m[36m:[m            `Destruction automatique de la session expirée ${[1;31mexpired[mSession.id}.`,
+[35mserver.js[m[36m:[m[32m1145[m[36m:[m          await [1;31mdestroySession[mInternal(
+[35mserver.js[m[36m:[m[32m1146[m[36m:[m            [1;31mexpired[mSession.id,
+[35mserver.js[m[36m:[m[32m1147[m[36m:[m            '[1;31mexpired[m-[1;31mcleanup[m'
+[35mserver.js[m[36m:[m[32m1151[m[36m:[m            `Session expirée ${[1;31mexpired[mSession.id} détruite.`,
+[35mserver.js[m[36m:[m[32m1160[m[36m:[m            `Impossible de détruire la session expirée ${[1;31mexpired[mSession.id} : ${error.message}`,
+[35mserver.js[m[36m:[m[32m1196[m[36m:[m  // Les expirations sont reprises par [1;31mcleanup[mExpiredSessions().
+[35mserver.js[m[36m:[m[32m3863[m[36m:[m  deployOperation.phase = '[1;31mcleanup[m';
+[35mserver.js[m[36m:[m[32m3894[m[36m:[m          const [1;31mcleanup[mTarget =
+[35mserver.js[m[36m:[m[32m3916[m[36m:[m            [1;31mcleanup[mTarget.workingDirectory
+[35mserver.js[m[36m:[m[32m3953[m[36m:[m    } catch ([1;31mcleanup[mError) {
+[35mserver.js[m[36m:[m[32m3955[m[36m:[m        `Echec du nettoyage automatique: ${[1;31mcleanup[mError.message}`,
+[35mserver.js[m[36m:[m[32m4088[m[36m:[m          await [1;31mdestroySession[mInternal(
+[35mserver.js[m[36m:[m[32m4761[m[36m:[mconst [1;31mexpired[mSessionCleanupTimer = setInterval(
+[35mserver.js[m[36m:[m[32m4763[m[36m:[m    [1;31mcleanup[mExpiredSessions().catch((error) => {
+[35mserver.js[m[36m:[m[32m4773[m[36m:[m[1;31mexpired[mSessionCleanupTimer.unref();
+[35mserver.js[m[36m:[m[32m4778[m[36m:[m    await [1;31mcleanup[mExpiredSessions();
+[35msrc/controllers/mfa.controller.js[m[36m:[m[32m184[m[36m:[m      [1;31mrecover[myCodes: codes,
+[35msrc/controllers/mfa.controller.js[m[36m:[m[32m223[m[36m:[m  [1;31mrecover[my
+[35msrc/controllers/mfa.controller.js[m[36m:[m[32m257[m[36m:[m    if ([1;31mrecover[my) {
+[35msrc/controllers/mfa.controller.js[m[36m:[m[32m263[m[36m:[m              req.body.[1;31mrecover[myCode
+[35msrc/database/migrations/006_mfa.sql[m[36m:[m[32m12[m[36m:[mCREATE TABLE IF NOT EXISTS user_mfa_[1;31mrecover[my_codes (
+[35msrc/database/migrations/006_mfa.sql[m[36m:[m[32m18[m[36m:[m  CONSTRAINT user_mfa_[1;31mrecover[my_codes_user_hash_unique UNIQUE (user_id, code_hash)
+[35msrc/database/migrations/006_mfa.sql[m[36m:[m[32m21[m[36m:[mCREATE INDEX IF NOT EXISTS idx_user_mfa_[1;31mrecover[my_codes_user_id ON user_mfa_[1;31mrecover[my_codes(user_id);
+[35msrc/database/migrations/006_mfa.sql[m[36m:[m[32m22[m[36m:[mCREATE INDEX IF NOT EXISTS idx_user_mfa_[1;31mrecover[my_codes_unused ON user_mfa_[1;31mrecover[my_codes(user_id) WHERE used_at IS NULL;
+[35msrc/middleware/validation.middleware.js[m[36m:[m[32m281[m[36m:[m  const [1;31mrecover[myCode = typeof req.body?.[1;31mrecover[myCode === 'string' ? req.body.[1;31mrecover[myCode.trim() : '';
+[35msrc/middleware/validation.middleware.js[m[36m:[m[32m283[m[36m:[m  const validRecoveryCode = [1;31mrecover[myCode.length <= 32 && Boolean([1;31mrecover[myCode);
+[35msrc/middleware/validation.middleware.js[m[36m:[m[32m288[m[36m:[m  req.body.[1;31mrecover[myCode = [1;31mrecover[myCode;
+[35msrc/repositories/mfa.repository.js[m[36m:[m[32m13[m[36m:[masync function replaceRecoveryCodes({ userId, codeHashes }, client) { const e = getExecutor(client); await e.query('DELETE FROM user_mfa_[1;31mrecover[my_codes WHERE user_id=$1', [userId]); for (const hash of codeHashes) await e.query('INSERT INTO user_mfa_[1;31mrecover[my_codes (id,user_id,code_hash) VALUES ($1,$2,$3)', [crypto.randomUUID(), userId, hash]); }
+[35msrc/repositories/mfa.repository.js[m[36m:[m[32m19[m[36m:[masync function consumeRecoveryCode({ userId, codeHash }, client) { const r = await getExecutor(client).query('UPDATE user_mfa_[1;31mrecover[my_codes SET used_at=NOW() WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL RETURNING *', [userId,codeHash]); return r.rows[0] || null; }
+[35msrc/repositories/mfa.repository.js[m[36m:[m[32m20[m[36m:[masync function deleteRecoveryCodes(userId, client) { await getExecutor(client).query('DELETE FROM user_mfa_[1;31mrecover[my_codes WHERE user_id=$1', [userId]); }
+[35msrc/routes/auth.routes.js[m[36m:[m[32m14[m[36m:[mrouter.post('/mfa/[1;31mrecover[my', validationMiddleware.validateRecoveryLogin, mfaController.useRecoveryCode);
+[35msrc/services/mfa.service.js[m[36m:[m[32m51[m[36m:[m  return crypto.createHash('sha256').update(`terminiator:mfa-[1;31mrecover[my:${normalizeRecoveryCode(code)}`, 'utf8').digest('hex');

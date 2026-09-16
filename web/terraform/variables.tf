@@ -17,9 +17,9 @@ variable "external_network_name" {
 }
 
 variable "image_name" {
-  description = "Nom exact de l'image Ubuntu Infomaniak"
+  description = "Nom exact de l'image golden GPU Privalyse"
   type        = string
-  default     = "Ubuntu 24.04 LTS Noble Numbat"
+  default     = "privalyse-gpu-golden-final-2026-09-15"
 }
 
 variable "workspace_name" {
@@ -54,7 +54,7 @@ variable "team_size_hint" {
 variable "root_volume_size_gb" {
   description = "Taille du volume racine en Gio"
   type        = number
-  default     = 40
+  default     = 80
 
   validation {
     condition     = var.root_volume_size_gb >= 30
@@ -69,6 +69,29 @@ variable "allowed_cidr" {
   validation {
     condition     = can(cidrhost(var.allowed_cidr, 0)) && var.allowed_cidr != "0.0.0.0/0"
     error_message = "allowed_cidr doit etre un CIDR restrictif, par exemple 203.0.113.10/32."
+  }
+}
+
+variable "ssh_keypair_name" {
+  description = "Nom du keypair OpenStack pour acces SSH temporaire; vide en production"
+  type        = string
+  default     = ""
+}
+
+variable "ssh_admin_cidr" {
+  description = "CIDR IPv4 autorise a joindre SSH; vide pour desactiver SSH"
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      trimspace(var.ssh_admin_cidr) == "" ||
+      (
+        can(cidrhost(var.ssh_admin_cidr, 0)) &&
+        var.ssh_admin_cidr != "0.0.0.0/0"
+      )
+    )
+    error_message = "ssh_admin_cidr doit etre vide ou un CIDR IPv4 restrictif."
   }
 }
 
@@ -114,15 +137,9 @@ variable "open_webui_image" {
 }
 
 variable "instance_type" {
-  description = "Nom exact du flavor CPU OpenStack Infomaniak"
+  description = "Nom exact du flavor GPU OpenStack Infomaniak"
   type        = string
-  default     = "a4-ram8-disk0"
-}
-
-variable "webui_secret_key" {
-  description = "Cle secrete propre a la session OpenWebUI"
-  type        = string
-  sensitive   = true
+  default     = "nvl4-a16-ram32-disk80-perf2"
 }
 
 variable "owui_name" {
@@ -135,13 +152,6 @@ variable "owui_email" {
   description = "Adresse e-mail du compte administrateur OpenWebUI"
   type        = string
   default     = ""
-}
-
-variable "owui_password" {
-  description = "Mot de passe du compte administrateur OpenWebUI"
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 variable "trusted_email_header" {

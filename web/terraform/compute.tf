@@ -27,46 +27,26 @@ locals {
 resource "openstack_compute_instance_v2" "ai_host" {
   name         = "${var.project}-${var.workspace_slug}"
   flavor_id    = data.openstack_compute_flavor_v2.cpu.id
+  image_id     = data.openstack_images_image_v2.ubuntu.id
   config_drive = true
+  key_pair     = length(trimspace(var.ssh_keypair_name)) > 0 ? var.ssh_keypair_name : null
 
   security_groups = [
     openstack_networking_secgroup_v2.session.name
   ]
 
-  block_device {
-    uuid                  = data.openstack_images_image_v2.ubuntu.id
-    source_type           = "image"
-    destination_type      = "volume"
-    volume_size           = var.root_volume_size_gb
-    boot_index            = 0
-    delete_on_termination = true
-  }
-
   network {
     uuid = data.openstack_networking_network_v2.external.id
   }
 
-  user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    ollama_model          = local.selected_model
-    ollama_image          = var.ollama_image
-    open_webui_image      = var.open_webui_image
-    webui_secret_key      = var.webui_secret_key
-    owui_name             = var.owui_name
-    owui_email            = var.owui_email
-    owui_password         = var.owui_password
-    workspace_url         = var.workspace_url
-    auth_mode             = var.auth_mode
-    trusted_email_header  = var.trusted_email_header
-    trusted_name_header   = var.trusted_name_header
-    trusted_groups_header = var.trusted_groups_header
-    trusted_role_header   = var.trusted_role_header
-  })
+  # Runtime provisionne dans l'image golden GPU.
+  user_data = null
 
   metadata = {
     project         = var.project
     workspace       = var.workspace_slug
     managed_by      = "privalyse"
-    compute_profile = "cpu"
+    compute_profile = "gpu"
     session_ttl_h   = tostring(var.session_ttl_hours)
   }
 
@@ -78,7 +58,14 @@ resource "openstack_compute_instance_v2" "ai_host" {
 
     precondition {
       condition     = length(trimspace(var.instance_type)) > 0
-      error_message = "instance_type doit contenir le nom exact d'un flavor CPU OpenStack."
+      error_message = "instance_type doit contenir le nom exact d'un flavor OpenStack."
+    }
+    precondition {
+      condition = (
+        (trimspace(var.ssh_keypair_name) == "" && trimspace(var.ssh_admin_cidr) == "") ||
+        (trimspace(var.ssh_keypair_name) != "" && trimspace(var.ssh_admin_cidr) != "")
+      )
+      error_message = "SSH doit etre configure avec ssh_keypair_name ET ssh_admin_cidr, ou avec les deux vides."
     }
   }
 }

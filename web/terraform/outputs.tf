@@ -14,11 +14,9 @@ output "instance_public_ip" {
 }
 
 output "workspace_access_url" {
-  description = "URL technique utilisee par le proxy Privalyse pour joindre OpenWebUI"
+  description = "URL HTTPS mTLS utilisee par le backend Privalyse pour joindre le worker"
 
-  value = trimspace(var.workspace_url) != "" ? trimspace(var.workspace_url) : (
-    "http://${openstack_compute_instance_v2.ai_host.access_ip_v4}:3000"
-  )
+  value = "https://${openstack_compute_instance_v2.ai_host.access_ip_v4}"
 }
 
 output "workspace_summary" {
@@ -33,7 +31,7 @@ output "workspace_summary" {
     region          = var.openstack_region
     network         = var.external_network_name
     flavor          = var.instance_type
-    compute_profile = "cpu"
+    compute_profile = "gpu"
     image           = var.image_name
     model           = local.selected_model
     root_volume_gb  = var.root_volume_size_gb

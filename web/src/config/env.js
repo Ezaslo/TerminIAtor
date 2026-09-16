@@ -308,11 +308,42 @@ const config = {
     ).trim(),
   },
 
+  workerPki: {
+    opensslBinary: (
+      process.env.PRIVALYSE_OPENSSL_BIN ||
+      'openssl'
+    ).trim(),
+
+    serverCaKeyPath: (
+      process.env.PRIVALYSE_WORKER_SERVER_CA_KEY ||
+      ''
+    ).trim(),
+
+    serverCaCertPath: (
+      process.env.PRIVALYSE_WORKER_SERVER_CA_CERT ||
+      ''
+    ).trim(),
+
+    clientCaCertPath: (
+      process.env.PRIVALYSE_BACKEND_CLIENT_CA_CERT ||
+      ''
+    ).trim(),
+
+    backendClientCertPath: (
+      process.env.PRIVALYSE_BACKEND_CLIENT_CERT ||
+      ''
+    ).trim(),
+
+    backendClientKeyPath: (
+      process.env.PRIVALYSE_BACKEND_CLIENT_KEY ||
+      ''
+    ).trim(),
+  },
   workspace: {
-    // Profil CPU unique pour le MVP.
+    // Profil GPU golden Privalyse.
     instanceType: (
-      process.env.PRIVALYSE_CPU_FLAVOR ||
-      'a4-ram8-disk0'
+      process.env.PRIVALYSE_GPU_FLAVOR ||
+      'nvl4-a16-ram32-disk80-perf2'
     ).trim(),
 
     // Choix logique envoyé à Terraform.
@@ -329,7 +360,7 @@ const config = {
 
     imageName: (
       process.env.PRIVALYSE_IMAGE_NAME ||
-      'Ubuntu 24.04 LTS Noble Numbat'
+      'privalyse-gpu-golden-final-2026-09-15'
     ).trim(),
 
     networkName: (
@@ -342,11 +373,21 @@ const config = {
       'PRIVALYSE_ROOT_VOLUME_GB',
       30,
       500,
-      40
+      80
     ),
 
     allowedCidr: (
       process.env.TF_VAR_allowed_cidr ||
+      ''
+    ).trim(),
+
+    sshKeypairName: (
+      process.env.PRIVALYSE_SSH_KEYPAIR_NAME ||
+      ''
+    ).trim(),
+
+    sshAdminCidr: (
+      process.env.PRIVALYSE_SSH_ADMIN_CIDR ||
       ''
     ).trim(),
 

@@ -648,6 +648,43 @@ async function addUserToSession(
   return result.rows[0];
 }
 /**
+ * Recherche la session associee a une instance OpenStack.
+ *
+ * L'UUID OpenStack doit identifier au maximum une seule session.
+ *
+ * @param {string} instanceId UUID OpenStack.
+ * @returns {Promise<object|null>}
+ */
+async function getSessionByInstanceId(instanceId) {
+  const normalizedInstanceId =
+    typeof instanceId === 'string'
+      ? instanceId.trim()
+      : '';
+
+  if (!normalizedInstanceId) {
+    return null;
+  }
+
+  const result = await database.query(
+    `
+      SELECT *
+      FROM sessions
+      WHERE instance_id = $1
+      ORDER BY created_at DESC
+      LIMIT 2
+    `,
+    [normalizedInstanceId]
+  );
+
+  if (result.rowCount > 1) {
+    throw new Error(
+      'Instance OpenStack associee a plusieurs sessions.'
+    );
+  }
+
+  return result.rows[0] || null;
+}
+/**
  * Vérifie qu'un utilisateur peut accéder à une session.
  *
  * @param {string} sessionId Identifiant de la session.
@@ -655,6 +692,113 @@ async function addUserToSession(
  * @param {string} tenantId Identifiant du tenant.
  * @returns {Promise<boolean>}
  */
+/**
+ * Cree ou renouvelle le jeton d'enrollment d'un worker.
+ *
+ * Seul le SHA-256 du jeton est stocke en base.
+ */
+async function issueWorkerEnrollment(
+  sessionId,
+  tokenHash,
+  expiresAt
+) {
+  const normalizedTokenHash =
+    typeof tokenHash === 'string'
+      ? tokenHash.trim().toLowerCase()
+      : '';
+
+  if (!/^[0-9a-f]{64}$/.test(normalizedTokenHash)) {
+    throw new Error(
+      'Hash du jeton enrollment invalide.'
+    );
+  }
+
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        worker_enrollment_token_hash = $2,
+        worker_enrollment_issued_at = NOW(),
+        worker_enrollment_expires_at = $3,
+        worker_enrollment_consumed_at = NULL,
+        worker_enrollment_csr_sha256 = NULL,
+        worker_certificate_pem = NULL,
+        updated_at = NOW()
+      WHERE id = $1
+        AND status = 'provisioning'
+        AND destroyed_at IS NULL
+      RETURNING *
+    `,
+    [
+      sessionId,
+      normalizedTokenHash,
+      expiresAt,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+/**
+ * Marque atomiquement un enrollment comme consomme.
+ *
+ * Le hash du jeton reste en base afin de pouvoir rendre
+ * un retry identique idempotent si la reponse reseau est perdue.
+ */
+async function consumeWorkerEnrollment(
+  sessionId,
+  tokenHash,
+  csrSha256,
+  certificatePem
+) {
+  const normalizedTokenHash =
+    typeof tokenHash === 'string'
+      ? tokenHash.trim().toLowerCase()
+      : '';
+
+  const normalizedCsrSha256 =
+    typeof csrSha256 === 'string'
+      ? csrSha256.trim().toLowerCase()
+      : '';
+
+  if (!/^[0-9a-f]{64}$/.test(normalizedTokenHash)) {
+    throw new Error(
+      'Hash du jeton enrollment invalide.'
+    );
+  }
+
+  if (!/^[0-9a-f]{64}$/.test(normalizedCsrSha256)) {
+    throw new Error(
+      'Hash CSR invalide.'
+    );
+  }
+
+  const result = await database.query(
+    `
+      UPDATE sessions
+      SET
+        worker_enrollment_consumed_at = NOW(),
+        worker_enrollment_csr_sha256 = $3,
+        worker_certificate_pem = $4,
+        updated_at = NOW()
+      WHERE id = $1
+        AND status = 'provisioning'
+        AND destroyed_at IS NULL
+        AND worker_enrollment_token_hash = $2
+        AND worker_enrollment_consumed_at IS NULL
+        AND worker_enrollment_expires_at > NOW()
+      RETURNING *
+    `,
+    [
+      sessionId,
+      normalizedTokenHash,
+      normalizedCsrSha256,
+      certificatePem,
+    ]
+  );
+
+  return result.rows[0] || null;
+}
 async function canUserAccessSession(
   sessionId,
   userId,
@@ -691,6 +835,9 @@ module.exports = {
   updateSessionStatus,
   updateSessionInfrastructure,
   getSessionById,
+  getSessionByInstanceId,
+  issueWorkerEnrollment,
+  consumeWorkerEnrollment,
   clearDestroyedSessionInfrastructureMetadata,
   canUserAccessSession,
   getSessionSecrets,

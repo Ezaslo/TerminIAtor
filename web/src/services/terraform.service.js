@@ -65,6 +65,12 @@ function runTerraform(
         ? options.onLog
         : () => {};
 
+    const timeoutMs =
+      Number.isFinite(options.timeoutMs) &&
+      options.timeoutMs > 0
+        ? Math.floor(options.timeoutMs)
+        : null;
+
     onLog(
       `terraform ${argumentsList.join(' ')}`,
       'info'
@@ -93,9 +99,45 @@ function runTerraform(
       }
     );
 
-    child.on('error', (error) => {
+    let timedOut = false;
+    let timeoutTimer = null;
+    let forceKillTimer = null;
+    let settled = false;
+
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
       reject(error);
+    };
+
+    child.on('error', (error) => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      rejectOnce(error);
     });
+
+    if (timeoutMs) {
+      timeoutTimer = setTimeout(() => {
+        if (settled || child.exitCode !== null) return;
+
+        timedOut = true;
+        onLog(
+          `terraform ${argumentsList[0]} depasse le timeout de ${Math.ceil(timeoutMs / 1000)}s, arret du processus`,
+          'error'
+        );
+
+        child.kill('SIGTERM');
+
+        forceKillTimer = setTimeout(() => {
+          if (
+            !settled &&
+            child.exitCode === null
+          ) {
+            child.kill('SIGKILL');
+          }
+        }, 5000);
+      }, timeoutMs);
+    }
 
     child.stdout.on('data', (data) => {
       data
@@ -120,7 +162,23 @@ function runTerraform(
     });
 
     child.on('close', (exitCode) => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+
+      if (settled) return;
+
+      if (timedOut) {
+        rejectOnce(
+          new Error(
+            `Terraform timeout after ${Math.ceil(timeoutMs / 1000)} seconds`
+          )
+        );
+        return;
+      }
+
       if (exitCode === 0) {
+        settled = true;
+
         onLog(
           `terraform ${argumentsList[0]} termine (code 0)`,
           'success'
@@ -138,7 +196,7 @@ function runTerraform(
         'error'
       );
 
-      reject(
+      rejectOnce(
         new Error(
           `Terraform exited with code ${exitCode}`
         )
@@ -184,6 +242,11 @@ function outputRaw(
         cwd: workingDirectory,
         encoding: 'utf8',
         shell: false,
+        timeout:
+          Number.isFinite(options.timeoutMs) &&
+          options.timeoutMs > 0
+            ? Math.floor(options.timeoutMs)
+            : undefined,
         env: buildTerraformEnvironment(
           options.extraEnvironment || {}
         ),

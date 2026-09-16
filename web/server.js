@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const openstackService = require('./src/services/openstack.service');
 const { AsyncLocalStorage } = require('async_hooks');
 const database = require('./src/database/database');
 const healthRoutes = require('./src/routes/health.routes');
@@ -41,6 +42,9 @@ const invitationRoutes = require(
 );
 const sessionRoutes = require(
   './src/routes/session.routes'
+);
+const internalWorkerRoutes = require(
+  './src/routes/internal-worker.routes'
 );
 const authMiddleware = require(
   './src/middleware/auth.middleware'
@@ -131,6 +135,10 @@ app.use(
 app.use(
   '/api/sessions',
   sessionRoutes
+);
+app.use(
+  '/api/internal/workers',
+  internalWorkerRoutes
 );
 app.use(express.static('public'));
 
@@ -327,6 +335,10 @@ const launchTokens = {};
 const ttlDestroyTimers = new Map();
 const EXPIRED_SESSION_CLEANUP_INTERVAL_MS =
   5 * 60 * 1000;
+const PROVISIONING_TIMEOUT_MS =
+  15 * 60 * 1000;
+const READINESS_RETRY_DELAY_MS = 5000;
+const READINESS_HTTP_TIMEOUT_MS = 4000;
 const PROXY_COOKIE_NAME = 'privalyse_launch_token';
 
 // Les destructions Terraform sont sérialisées globalement.
@@ -379,7 +391,7 @@ const AUTH_MODES = new Set([
   'trusted_header'
 ]);
 
-const DEFAULT_INSTANCE_TYPE = 'a4-ram8-disk0';
+const DEFAULT_INSTANCE_TYPE = config.workspace.instanceType;
 
 const INSTANCE_TYPES = new Set([
   DEFAULT_INSTANCE_TYPE
@@ -1957,7 +1969,8 @@ function prepareSessionTerraformDirectory(sessionId) {
 function runTerraform(
   argumentsList,
   extraEnvironment = {},
-  workingDirectory = TERRAFORM_DIR
+  workingDirectory = TERRAFORM_DIR,
+  executionOptions = {}
 ) {
   const operation = getCurrentOperation();
 
@@ -1966,10 +1979,29 @@ function runTerraform(
     {
       workingDirectory,
       extraEnvironment,
+      timeoutMs: executionOptions.timeoutMs,
       onLog: (message, type = 'info') =>
         pushLog(message, type, operation),
     }
   );
+}
+
+function getRemainingProvisioningMs(
+  provisioningDeadlineMs
+) {
+  const remainingMs =
+    provisioningDeadlineMs - Date.now();
+
+  if (
+    !Number.isFinite(provisioningDeadlineMs) ||
+    remainingMs <= 0
+  ) {
+    throw new Error(
+      'Provisioning timeout: la VM n est pas prete dans la fenetre maximale de 15 minutes.'
+    );
+  }
+
+  return remainingMs;
 }
 
 function sleep(ms) {
@@ -1994,9 +2026,15 @@ async function waitForOperationToLeaveRunning(
   return operation.status !== 'running';
 }
 
-function checkHttpStatus(url, acceptedStatuses = [200]) {
+function checkHttpStatus(
+  url,
+  acceptedStatuses = [200],
+  timeoutMs = READINESS_HTTP_TIMEOUT_MS
+) {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
+      res.resume();
+
       if (acceptedStatuses.includes(res.statusCode)) {
         resolve();
       } else {
@@ -2005,20 +2043,25 @@ function checkHttpStatus(url, acceptedStatuses = [200]) {
     });
 
     req.on('error', reject);
-    req.setTimeout(4000, () => {
-      req.destroy(new Error('timeout'));
-    });
+    req.setTimeout(
+      Math.max(1, timeoutMs),
+      () => {
+        req.destroy(new Error('timeout'));
+      }
+    );
   });
 }
 
 function terraformOutputRaw(
   name,
-  workingDirectory = TERRAFORM_DIR
+  workingDirectory = TERRAFORM_DIR,
+  timeoutMs = null
 ) {
   return terraformService.outputRaw(
     name,
     {
       workingDirectory,
+      timeoutMs,
     }
   );
 }
@@ -2419,6 +2462,131 @@ function stripPrivalyseRoutingQuery(requestUrl) {
   }
 }
 
+let workerMtlsOptionsCache = null;
+
+function getWorkerMtlsOptions() {
+  const workerPki =
+    config.workerPki || {};
+
+  const requiredFiles = [
+    [
+      'CA serveur worker',
+      workerPki.serverCaCertPath,
+    ],
+    [
+      'certificat client backend',
+      workerPki.backendClientCertPath,
+    ],
+    [
+      'cle client backend',
+      workerPki.backendClientKeyPath,
+    ],
+  ];
+
+  for (
+    const [label, filePath]
+    of requiredFiles
+  ) {
+    if (
+      !filePath ||
+      !fs.existsSync(filePath)
+    ) {
+      throw new Error(
+        `${label} mTLS introuvable.`
+      );
+    }
+  }
+
+  if (!workerMtlsOptionsCache) {
+    workerMtlsOptionsCache = {
+      ca: fs.readFileSync(
+        workerPki.serverCaCertPath
+      ),
+
+      cert: fs.readFileSync(
+        workerPki.backendClientCertPath
+      ),
+
+      key: fs.readFileSync(
+        workerPki.backendClientKeyPath
+      ),
+
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.2',
+    };
+  }
+
+  return workerMtlsOptionsCache;
+}
+
+async function checkWorkerHealthz(
+  ip,
+  timeoutMs
+) {
+  const healthUrl =
+    new URL(
+      `https://${ip}/healthz`
+    );
+
+  await new Promise(
+    (resolve, reject) => {
+      const request =
+        https.request(
+          healthUrl,
+          {
+            method: 'GET',
+
+            headers: {
+              Accept: 'text/plain',
+              Connection: 'close',
+            },
+
+            ...getWorkerMtlsOptions(),
+          },
+          (response) => {
+            const statusCode =
+              Number(
+                response.statusCode || 0
+              );
+
+            response.resume();
+
+            if (statusCode === 200) {
+              resolve();
+              return;
+            }
+
+            reject(
+              new Error(
+                `Readiness worker HTTP ${statusCode}.`
+              )
+            );
+          }
+        );
+
+      request.setTimeout(
+        Math.max(
+          1,
+          Number(timeoutMs) || 1
+        ),
+        () => {
+          request.destroy(
+            new Error(
+              'Timeout readiness worker.'
+            )
+          );
+        }
+      );
+
+      request.on(
+        'error',
+        reject
+      );
+
+      request.end();
+    }
+  );
+}
 async function proxyRequestToOpenWebUi(
   req,
   res,
@@ -2489,6 +2657,10 @@ async function proxyRequestToOpenWebUi(
     {
       method: req.method,
       headers,
+
+      ...(targetUrl.protocol === 'https:'
+        ? getWorkerMtlsOptions()
+        : {}),
     },
     (proxyRes) => {
       const responseHeaders = {
@@ -2637,6 +2809,10 @@ async function proxyUpgradeToOpenWebUi(
       `${targetUrl.pathname}${targetUrl.search}`,
     method: req.method,
     headers,
+
+    ...(targetUrl.protocol === 'https:'
+      ? getWorkerMtlsOptions()
+      : {}),
   });
 
   proxyReq.on(
@@ -2712,43 +2888,57 @@ async function proxyUpgradeToOpenWebUi(
   proxyReq.end();
 }
 
-function getReadinessBudget() {
+function getReadinessBudget(
+  provisioningDeadlineMs
+) {
   return {
-    maxAttempts: 180,
-    delayMs: 5000,
+    deadlineMs: provisioningDeadlineMs,
+    delayMs: READINESS_RETRY_DELAY_MS,
+    requestTimeoutMs: READINESS_HTTP_TIMEOUT_MS,
   };
 }
 
 async function waitForIaReady(
   ip,
-  expectedModel = null
+  expectedModel = null,
+  provisioningDeadlineMs =
+    Date.now() + PROVISIONING_TIMEOUT_MS
 ) {
   const operation = getCurrentOperation();
 
   const openWebUiUrl =
-    `http://${ip}:3000/`;
+    `https://${ip}`;
+
+  const healthzUrl =
+    `${openWebUiUrl}/healthz`;
+
+  const readinessStartedAtMs = Date.now();
 
   const {
-    maxAttempts,
+    deadlineMs,
     delayMs,
-  } = getReadinessBudget();
+    requestTimeoutMs,
+  } = getReadinessBudget(
+    provisioningDeadlineMs
+  );
 
-  const totalMinutes = Math.round(
-    (maxAttempts * delayMs) / 60000
+  const initialRemainingMs = Math.max(
+    0,
+    deadlineMs - readinessStartedAtMs
   );
 
   pushLog(
-    `Attente du workspace CPU Privalyse sur ${openWebUiUrl} ` +
-    `(fenetre maximale ~${totalMinutes} min, ` +
+    `Attente du workspace Privalyse sur ${healthzUrl} ` +
+    `(deadline provisioning dans ~${Math.ceil(initialRemainingMs / 60000)} min, ` +
     `modele=${expectedModel || 'n/a'})`,
     'info'
   );
 
-  for (
-    let attempt = 1;
-    attempt <= maxAttempts;
-    attempt += 1
-  ) {
+  let attempt = 0;
+
+  while (Date.now() < deadlineMs) {
+    attempt += 1;
+
     if (operation?.cancelReadiness) {
       pushLog(
         'Attente readiness interrompue a la demande utilisateur',
@@ -2761,14 +2951,24 @@ async function waitForIaReady(
       };
     }
 
+    const remainingBeforeRequestMs =
+      deadlineMs - Date.now();
+
+    if (remainingBeforeRequestMs <= 0) {
+      break;
+    }
+
     try {
-      await checkHttpStatus(
-        openWebUiUrl,
-        [200, 301, 302, 307, 308]
+      await checkWorkerHealthz(
+        ip,
+        Math.min(
+          requestTimeoutMs,
+          remainingBeforeRequestMs
+        )
       );
 
       pushLog(
-        `Workspace Privalyse pret sur ${openWebUiUrl}`,
+        `Workspace Privalyse pret sur ${healthzUrl}`,
         'ia-ready'
       );
 
@@ -2785,27 +2985,30 @@ async function waitForIaReady(
       ) {
         const elapsedSeconds =
           Math.round(
-            (attempt * delayMs) / 1000
+            (Date.now() - readinessStartedAtMs) / 1000
           );
 
         pushLog(
-          `Workspace CPU pas encore pret ` +
-          `(tentative ${attempt}/${maxAttempts}, ` +
-          `~${elapsedSeconds}s ecoulees)`,
+          `Workspace pas encore pret ` +
+          `(tentative ${attempt}, ` +
+          `~${elapsedSeconds}s ecoulees, ` +
+          `deadline 15 min)`,
           'info'
         );
       }
 
+      const waitBudgetMs = Math.min(
+        delayMs,
+        Math.max(0, deadlineMs - Date.now())
+      );
       const sliceMs = 500;
 
       for (
         let waited = 0;
-        waited < delayMs;
+        waited < waitBudgetMs;
         waited += sliceMs
       ) {
-        if (
-          operation?.cancelReadiness
-        ) {
+        if (operation?.cancelReadiness) {
           pushLog(
             'Attente readiness interrompue a la demande utilisateur',
             'info'
@@ -2820,7 +3023,7 @@ async function waitForIaReady(
         await sleep(
           Math.min(
             sliceMs,
-            delayMs - waited
+            waitBudgetMs - waited
           )
         );
       }
@@ -2828,7 +3031,7 @@ async function waitForIaReady(
   }
 
   pushLog(
-    `Workspace Prydena indisponible apres environ ${totalMinutes} minutes`,
+    'Workspace Privalyse indisponible avant la deadline de provisioning de 15 minutes',
     'error'
   );
 
@@ -3148,7 +3351,6 @@ if (!quotaStatus.allowed) {
     finalAuthMode === 'trusted_header'
       ? crypto.randomBytes(18).toString('base64url')
       : owuiPassword;
-  const finalWebuiSecretKey = crypto.randomBytes(48).toString('hex');
   const expectedModel = AI_PULL_MAP[aiChoice] || null;
   const accessNotes = buildAccessNotes(
     finalAuthMode,
@@ -3156,15 +3358,12 @@ if (!quotaStatus.allowed) {
     finalOwuiEmail
   );
 
-  // Garde-fou pendant le provisioning : si le backend redémarre ou si la
-  // préparation reste bloquée, la boucle de nettoyage conserve une échéance.
-  // Cette date sera remplacée au premier passage à ready par ready_at + TTL.
+  // Le provisioning a sa propre deadline fixe de 15 minutes.
+  // Le TTL utilisateur 1h / 2h / 3h ne démarre qu'au premier READY.
+  const provisioningDeadlineMs =
+    Date.now() + PROVISIONING_TIMEOUT_MS;
   const provisioningSafetyExpiresAt = new Date(
-    Date.now() +
-      finalSessionTtlHours *
-        60 *
-        60 *
-        1000
+    provisioningDeadlineMs
   ).toISOString();
 
   let databaseSession = null;
@@ -3327,7 +3526,12 @@ pushLog(
       `team_size_hint = ${finalTeamSizeHint}\n` +
       `ai_choice = ${hclString(aiChoice)}\n` +
       `instance_type = ${hclString(finalInstanceType)}\n` +
+      `image_name = ${hclString(config.workspace.imageName)}\n` +
+      `external_network_name = ${hclString(config.workspace.networkName)}\n` +
+      `root_volume_size_gb = ${config.workspace.rootVolumeSizeGb}\n` +
       `allowed_cidr = ${hclString(finalAllowedCidr)}\n` +
+      `ssh_keypair_name = ${hclString(config.workspace.sshKeypairName)}\n` +
+      `ssh_admin_cidr = ${hclString(config.workspace.sshAdminCidr)}\n` +
       `workspace_url = ${hclString(finalWorkspaceUrl)}\n` +
       `auth_mode = ${hclString(finalAuthMode)}\n` +
       `trusted_email_header = ${hclString(finalTrustedEmailHeader)}\n` +
@@ -3371,7 +3575,12 @@ pushLog(
     await runTerraform(
       ['init', '-input=false'],
       {},
-      sessionTerraformDirectory
+      sessionTerraformDirectory,
+      {
+        timeoutMs: getRemainingProvisioningMs(
+          provisioningDeadlineMs
+        ),
+      }
     );
 
     await runTerraform([
@@ -3383,7 +3592,12 @@ pushLog(
       `-var=team_size_hint=${finalTeamSizeHint}`,
       `-var=ai_choice=${aiChoice}`,
       `-var=instance_type=${finalInstanceType}`,
+      `-var=image_name=${config.workspace.imageName}`,
+      `-var=external_network_name=${config.workspace.networkName}`,
+      `-var=root_volume_size_gb=${config.workspace.rootVolumeSizeGb}`,
       `-var=allowed_cidr=${finalAllowedCidr}`,
+      `-var=ssh_keypair_name=${config.workspace.sshKeypairName}`,
+      `-var=ssh_admin_cidr=${config.workspace.sshAdminCidr}`,
       `-var=workspace_url=${finalWorkspaceUrl}`,
       `-var=auth_mode=${finalAuthMode}`,
       `-var=trusted_email_header=${finalTrustedEmailHeader}`,
@@ -3392,10 +3606,11 @@ pushLog(
       `-var=trusted_role_header=${finalTrustedRoleHeader}`,
       `-var=owui_name=${finalOwuiName}`,
       `-var=owui_email=${finalOwuiEmail}`
-    ], {
-      TF_VAR_owui_password: finalOwuiPassword,
-      TF_VAR_webui_secret_key: finalWebuiSecretKey
-    }, sessionTerraformDirectory);
+    ], {}, sessionTerraformDirectory, {
+      timeoutMs: getRemainingProvisioningMs(
+        provisioningDeadlineMs
+      ),
+    });
 
     await usageRepository.markMachineStarted(
       databaseSession.id,
@@ -3409,29 +3624,27 @@ pushLog(
 
     const ipOutput = terraformOutputRaw(
       'instance_public_ip',
-      sessionTerraformDirectory
+      sessionTerraformDirectory,
+      getRemainingProvisioningMs(
+        provisioningDeadlineMs
+      )
     );
 
     const instanceIdOutput = terraformOutputRaw(
       'instance_id',
-      sessionTerraformDirectory
+      sessionTerraformDirectory,
+      getRemainingProvisioningMs(
+        provisioningDeadlineMs
+      )
     );
-
-    const accessUrlOutput = terraformOutputRaw(
-      'workspace_access_url',
-      sessionTerraformDirectory
-    );
-
-    if (ipOutput.status === 0) {
+if (ipOutput.status === 0) {
       const ip = ipOutput.stdout.trim();
       const instanceId =
         instanceIdOutput.status === 0 && instanceIdOutput.stdout.trim() !== ''
           ? instanceIdOutput.stdout.trim()
           : null;
       const accessUrl =
-        accessUrlOutput.status === 0 && accessUrlOutput.stdout.trim() !== ''
-          ? accessUrlOutput.stdout.trim()
-          : `http://${ip}:3000`;
+        `https://${ip}`;
       pushLog(`IP publique session : ${ip}`, 'info');
       if (instanceId) {
         pushLog(`Instance OpenStack : ${instanceId}`,'info');
@@ -3455,6 +3668,67 @@ pushLog(
         'success'
       );
 
+      if (!instanceId) {
+        throw new Error(
+          'Impossible de recuperer instance_id pour enrollment worker.'
+        );
+      }
+
+      const workerEnrollmentToken =
+        crypto.randomBytes(32)
+          .toString('base64url');
+
+      const workerEnrollmentTokenHash =
+        crypto
+          .createHash('sha256')
+          .update(
+            workerEnrollmentToken,
+            'utf8'
+          )
+          .digest('hex');
+
+      const workerEnrollmentExpiresAt =
+        new Date(
+          provisioningDeadlineMs
+        );
+
+      if (
+        !Number.isFinite(
+          workerEnrollmentExpiresAt.getTime()
+        ) ||
+        workerEnrollmentExpiresAt.getTime() <=
+          Date.now()
+      ) {
+        throw new Error(
+          'Fenetre enrollment worker deja expiree.'
+        );
+      }
+
+      const enrollmentSession =
+        await sessionRepository.issueWorkerEnrollment(
+          databaseSession.id,
+          workerEnrollmentTokenHash,
+          workerEnrollmentExpiresAt
+        );
+
+      if (!enrollmentSession) {
+        throw new Error(
+          'Impossible de creer le jeton enrollment worker.'
+        );
+      }
+
+      await openstackService.setServerMetadata(
+        instanceId,
+        {
+          privalyse_enrollment_token:
+            workerEnrollmentToken,
+        }
+      );
+
+      pushLog(
+        'Jeton enrollment worker publie temporairement dans les metadata OpenStack.',
+        'success'
+      );
       sessionState.active = true;
       sessionState.status = 'provisioning';
       sessionState.workspaceName = finalWorkspaceName;
@@ -3493,7 +3767,8 @@ sessionState.groupId =
 const readiness =
   await waitForIaReady(
     ip,
-    expectedModel
+    expectedModel,
+    provisioningDeadlineMs
   );
 
 if (readiness.cancelled) {
