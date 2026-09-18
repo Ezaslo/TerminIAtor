@@ -51,7 +51,7 @@ jobs:
 
             if docker image inspect privalyse:rollback >/dev/null 2>&1; then
               docker tag privalyse:rollback privalyse:production
-              docker compose up -d --no-deps --no-build privalyse
+              docker compose up -d --no-deps --no-build --force-recreate privalyse
               echo "Application image rolled back."
             else
               echo "No rollback image available."
@@ -78,7 +78,7 @@ jobs:
           docker build             -t privalyse:production             -f "$DEPLOY_DIR/Dockerfile"             "$DEPLOY_DIR/web"
 
           docker compose run --rm --no-deps privalyse node src/database/migrate.js
-          docker compose up -d --no-deps --no-build privalyse
+          docker compose up -d --no-deps --no-build --force-recreate privalyse
 
           healthy=false
           for attempt in $(seq 1 30); do
