@@ -37,13 +37,11 @@ jobs:
       - name: Deploy application
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
-          PROD_USER: ${{ secrets.PROD_USER }}
-          PROD_PATH: ${{ secrets.PROD_PATH }}
         run: |
-          ssh "$PROD_USER@$PROD_HOST" "PROD_PATH='$PROD_PATH' bash -s" <<'REMOTE'
+          ssh "root@$PROD_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
 
-          cd "$PROD_PATH"
+          cd /opt/privalyse-git
 
           git fetch origin main
           git checkout main
