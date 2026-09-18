@@ -38,7 +38,7 @@ jobs:
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
         run: |
-          ssh "root@$PROD_HOST" 'bash -s' <<'REMOTE'
+          ssh "deploy@$PROD_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
 
           cd /opt/privalyse-git
