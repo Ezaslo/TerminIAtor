@@ -26,8 +26,8 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
-          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_HOST: 178.104.251.72
+          PROD_SSH_KEY: ${{ secrets.SSH }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/id_ed25519
@@ -36,7 +36,7 @@ jobs:
 
       - name: Deploy application
         env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_HOST: 178.104.251.72
         run: |
           ssh "enzo@$PROD_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
