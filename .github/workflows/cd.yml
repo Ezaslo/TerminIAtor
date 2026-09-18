@@ -44,12 +44,18 @@ jobs:
           cd /opt/privalyse-git
 
           git fetch origin main
-          git checkout main
-          git pull --ff-only origin main
+          DEPLOY_SHA="$(git rev-parse FETCH_HEAD)"
+          DEPLOY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$DEPLOY_DIR"' EXIT
 
-          docker compose build privalyse
-          docker compose run --rm privalyse node src/database/migrate.js
-          docker compose up -d --no-deps privalyse
+          echo "Deploying $DEPLOY_SHA"
+
+          git archive "$DEPLOY_SHA" Dockerfile web | tar -x -C "$DEPLOY_DIR"
+
+          docker build             -t privalyse:production             -f "$DEPLOY_DIR/Dockerfile"             "$DEPLOY_DIR/web"
+
+          docker compose run --rm --no-deps privalyse node src/database/migrate.js
+          docker compose up -d --no-deps --no-build privalyse
 
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:3001/health/ready >/dev/null; then
