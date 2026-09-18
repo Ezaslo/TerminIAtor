@@ -19,6 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    environment:
+      name: production
+      url: https://app.prydena.fr
+
     steps:
       - name: Configure SSH
         env:
