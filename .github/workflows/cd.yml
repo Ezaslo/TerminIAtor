@@ -1,0 +1,67 @@
+name: TerminIAtor CD
+
+on:
+  workflow_run:
+    workflows:
+      - "TerminIAtor CI"
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy app.prydena.fr
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy application
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_PATH: ${{ secrets.PROD_PATH }}
+        run: |
+          ssh "$PROD_USER@$PROD_HOST" "PROD_PATH='$PROD_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$PROD_PATH"
+
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+
+          docker compose build privalyse
+          docker compose run --rm privalyse node src/database/migrate.js
+          docker compose up -d --no-deps privalyse
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:3001/health/ready >/dev/null; then
+              echo "Deployment successful."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Health check failed."
+          docker compose logs --tail=100 privalyse
+          exit 1
+          REMOTE
+
+      - name: Verify public endpoint
+        run: curl --fail --silent --show-error https://app.prydena.fr/health/ready >/dev/null
