@@ -39,9 +39,26 @@ jobs:
           PROD_HOST: 178.104.251.72
         run: |
           ssh "enzo@$PROD_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -Eeuo pipefail
 
           cd /opt/privalyse-git
+
+          rollback() {
+            status=$?
+            trap - ERR
+
+            echo "Deployment failed. Rolling back application image..."
+
+            if docker image inspect privalyse:rollback >/dev/null 2>&1; then
+              docker tag privalyse:rollback privalyse:production
+              docker compose up -d --no-deps --no-build privalyse
+              echo "Application image rolled back."
+            else
+              echo "No rollback image available."
+            fi
+
+            exit "$status"
+          }
 
           git fetch origin main
           DEPLOY_SHA="$(git rev-parse FETCH_HEAD)"
@@ -50,6 +67,12 @@ jobs:
 
           echo "Deploying $DEPLOY_SHA"
 
+          # Keep the currently running application image as the rollback target.
+          docker image inspect privalyse:production >/dev/null
+          docker tag privalyse:production privalyse:rollback
+
+          trap rollback ERR
+
           git archive "$DEPLOY_SHA" Dockerfile web | tar -x -C "$DEPLOY_DIR"
 
           docker build             -t privalyse:production             -f "$DEPLOY_DIR/Dockerfile"             "$DEPLOY_DIR/web"
@@ -57,18 +80,25 @@ jobs:
           docker compose run --rm --no-deps privalyse node src/database/migrate.js
           docker compose up -d --no-deps --no-build privalyse
 
+          healthy=false
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:3001/health/ready >/dev/null; then
-              echo "Deployment successful."
-              exit 0
+              healthy=true
+              break
             fi
-
             sleep 2
           done
 
-          echo "Health check failed."
-          docker compose logs --tail=100 privalyse
-          exit 1
+          if [ "$healthy" != "true" ]; then
+            echo "Local health check failed."
+            docker compose logs --tail=100 privalyse
+            false
+          fi
+
+          curl --fail --silent --show-error https://app.prydena.fr/health/ready >/dev/null
+
+          trap - ERR
+          echo "Deployment successful: $DEPLOY_SHA"
           REMOTE
 
       - name: Verify public endpoint
