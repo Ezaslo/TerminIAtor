@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 15
 
     environment:
-      name: production
+      name: Prod
       url: https://app.prydena.fr
 
     steps:
